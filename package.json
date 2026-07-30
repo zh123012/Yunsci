@@ -1,0 +1,16 @@
+{
+  "name": "yunsci",
+  "version": "2.0.0",
+  "description": "Yunsci — AI-assisted bioinformatics & research platform",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:bg": "nohup node server.js > server.log 2>&1 &"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "sql.js": "^1.14.1",
+    "uuid": "^14.0.1",
+    "ws": "^8.16.0"
+  }
+}

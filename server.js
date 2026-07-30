@@ -1,0 +1,705 @@
+/**
+ * Yunsci — Multi-user server
+ *
+ * Features:
+ *   - User registration & login (password hashed with PBKDF2)
+ *   - Auth tokens for WebSocket / REST access
+ *   - Per-user independent Claude Code sessions (--resume)
+ *   - File upload / listing
+ *   - SQLite persistence (sql.js)
+ *   - Works behind Nginx reverse proxy
+ *
+ * Usage:
+ *   SECRET=change-me PORT=3456 node server.js
+ *   (default SECRET=dev-only-change-in-production)
+ */
+
+const express = require('express');
+const { spawn } = require('child_process');
+const { WebSocketServer } = require('ws');
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const { v4: uuidv4 } = require('uuid');
+const initSqlJs = require('sql.js');
+
+// ─── Configuration ───────────────────────────────────────────────────────────
+const PORT      = parseInt(process.env.PORT, 10) || 3456;
+const SECRET    = process.env.SECRET || 'dev-only-change-in-production';
+const CLAUDE_CMD = process.env.CLAUDE_CMD || 'claude';
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+const DB_PATH   = path.join(__dirname, 'data', 'claude-webui.db');
+const TOKEN_TTL_DAYS = 30;
+
+// ─── Ensure directories ──────────────────────────────────────────────────────
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+if (!fs.existsSync(path.dirname(DB_PATH))) fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+// ─── Database (sql.js) ───────────────────────────────────────────────────────
+let db;
+
+async function initDb() {
+  const SQL = await initSqlJs();
+  if (fs.existsSync(DB_PATH)) {
+    const buf = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buf);
+  } else {
+    db = new SQL.Database();
+  }
+
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt TEXT NOT NULL,
+    session_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    last_login TEXT
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS auth_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT UNIQUE NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    title TEXT DEFAULT 'New Chat',
+    session_id TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )`);
+
+  saveDb();
+}
+
+function saveDb() {
+  const data = db.export();
+  const buffer = Buffer.from(data);
+  fs.writeFileSync(DB_PATH, buffer);
+}
+
+// ─── Password helpers ────────────────────────────────────────────────────────
+const HASH_ITERATIONS = 100000;
+const HASH_KEYLEN = 64;
+
+function hashPassword(password, salt) {
+  return crypto.pbkdf2Sync(password, salt, HASH_ITERATIONS, HASH_KEYLEN, 'sha512').toString('hex');
+}
+
+function createUser(username, password) {
+  const salt = crypto.randomBytes(32).toString('hex');
+  const hash = hashPassword(password, salt);
+
+  try {
+    db.run('INSERT INTO users (username, password_hash, salt) VALUES (?, ?, ?)',
+           [username, hash, salt]);
+    saveDb();
+
+    // Create user's output directory
+    const userDir = path.join(USERS_OUTPUT_DIR, username);
+    if (!fs.existsSync(userDir)) {
+      fs.mkdirSync(userDir, { recursive: true });
+    }
+
+    return { success: true };
+  } catch (e) {
+    if (e.message && e.message.includes('UNIQUE')) {
+      return { success: false, error: 'Username already exists' };
+    }
+    return { success: false, error: e.message };
+  }
+}
+
+function verifyUser(username, password) {
+  const rows = db.exec('SELECT id, password_hash, salt FROM users WHERE username = ?', [username]);
+  if (!rows.length || !rows[0].values.length) return null;
+
+  const [id, storedHash, salt] = rows[0].values[0];
+  const hash = hashPassword(password, salt);
+  if (hash !== storedHash) return null;
+
+  // Update last_login
+  db.run('UPDATE users SET last_login = datetime(?) WHERE id = ?', [new Date().toISOString(), id]);
+  saveDb();
+
+  return { id, username };
+}
+
+function createAuthToken(userId) {
+  const token = uuidv4();
+  const expiresAt = new Date(Date.now() + TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  db.run('INSERT INTO auth_tokens (user_id, token, expires_at) VALUES (?, ?, ?)',
+         [userId, token, expiresAt]);
+  saveDb();
+  return token;
+}
+
+function validateAuthToken(token) {
+  const rows = db.exec(
+    'SELECT u.id, u.username, u.session_id, a.expires_at FROM auth_tokens a JOIN users u ON a.user_id = u.id WHERE a.token = ?',
+    [token]
+  );
+  if (!rows.length || !rows[0].values.length) return null;
+  const [userId, username, sessionId, expiresAt] = rows[0].values[0];
+  if (new Date(expiresAt) < new Date()) return null; // expired
+  return { userId, username, sessionId: sessionId || null };
+}
+
+function updateUserSessionId(userId, sessionId) {
+  db.run('UPDATE users SET session_id = ? WHERE id = ?', [sessionId, userId]);
+  saveDb();
+}
+
+function revokeAuthToken(token) {
+  db.run('DELETE FROM auth_tokens WHERE token = ?', [token]);
+  saveDb();
+}
+
+// ─── HTTP Server ─────────────────────────────────────────────────────────────
+const app = express();
+app.use(express.json({ limit: '110mb' }));
+app.use(express.urlencoded({ extended: true, limit: '110mb' }));
+
+// ─── Auth middleware ─────────────────────────────────────────────────────────
+function authMiddleware(req, res, next) {
+  const auth = req.headers['authorization'] || '';
+  if (!auth.startsWith('Bearer ')) return res.status(401).json({ error: 'Unauthorized' });
+  const user = validateAuthToken(auth.slice(7));
+  if (!user) return res.status(401).json({ error: 'Invalid or expired token' });
+  req.user = user;
+  next();
+}
+
+// ─── API: Auth ───────────────────────────────────────────────────────────────
+
+app.post('/api/register', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+  if (username.length < 2 || username.length > 32) {
+    return res.status(400).json({ error: 'Username must be 2-32 characters' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    return res.status(400).json({ error: 'Username can only contain letters, numbers, underscores' });
+  }
+
+  const result = createUser(username, password);
+  if (!result.success) {
+    return res.status(409).json({ error: result.error });
+  }
+
+  // Auto-login after register
+  const user = verifyUser(username, password);
+  if (!user) return res.status(500).json({ error: 'Registration succeeded but login failed' });
+
+  const token = createAuthToken(user.id);
+  res.json({ success: true, token, username: user.username });
+});
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+
+  const user = verifyUser(username, password);
+  if (!user) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+
+  const token = createAuthToken(user.id);
+  res.json({ success: true, token, username: user.username });
+});
+
+app.post('/api/logout', authMiddleware, (req, res) => {
+  const auth = req.headers['authorization'] || '';
+  revokeAuthToken(auth.slice(7));
+  res.json({ success: true });
+});
+
+app.get('/api/me', authMiddleware, (req, res) => {
+  res.json({ username: req.user.username });
+});
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime() });
+});
+
+// ─── API: Files (authenticated) ──────────────────────────────────────────────
+
+app.post('/api/upload', authMiddleware, (req, res) => {
+  const { filename, content } = req.body;
+  if (!filename || !content) return res.status(400).json({ error: 'filename and content required' });
+  const safe = path.basename(filename);
+  const uploadDir = path.join(USERS_OUTPUT_DIR, req.user.username, 'uploads');
+  if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(uploadDir, safe), Buffer.from(content, 'base64'));
+    const stat = fs.statSync(path.join(uploadDir, safe));
+    res.json({ success: true, path: path.join(uploadDir, safe), size: stat.size });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/files', authMiddleware, (req, res) => {
+  try {
+    const files = fs.readdirSync(UPLOAD_DIR).map(f => {
+      const s = fs.statSync(path.join(UPLOAD_DIR, f));
+      return { name: f, size: s.size, mtime: s.mtime };
+    });
+    res.json({ files });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/skills', authMiddleware, (req, res) => {
+  const skillsDir = path.join(process.env.HOME || '/root', '.claude', 'skills');
+  try {
+    const items = fs.readdirSync(skillsDir).filter(f => !f.startsWith('.') && f !== '.skills_store_lock.json' && f !== 'AI-research-SKILLs' && f !== 'nature-skills' && f !== 'paper-polish-workflow-skill');
+    const skills = items.map(f => {
+      const meta = { name: f };
+      const skillFile = path.join(skillsDir, f, 'SKILL.md');
+      if (fs.existsSync(skillFile)) {
+        const content = fs.readFileSync(skillFile, 'utf-8');
+        const desc = content.match(/description:\s*(.+)/);
+        if (desc) meta.description = desc[1].trim();
+      }
+      return meta;
+    });
+    res.json({ skills });
+  } catch (e) {
+    // Fallback to known skills list
+    res.json({ skills: [
+      { name: 'code-review', description: 'Review code changes' },
+      { name: 'diagnosing-bugs', description: 'Debug and fix issues' },
+      { name: 'prototype', description: 'Quick prototyping' },
+      { name: 'design-an-interface', description: 'Design UI components' },
+      { name: 'research', description: 'Research a topic' },
+      { name: 'domain-modeling', description: 'Model business domains' },
+      { name: 'bioinfo', description: 'Bioinformatics analysis' },
+      { name: 'single-cell', description: 'Single-cell data analysis' },
+    ]});
+  }
+});
+
+// ─── Conversations API ─────────────────────────────────────────────────────────
+app.post('/api/conversations', authMiddleware, (req, res) => {
+  const id = uuidv4();
+  const { title } = req.body || {};
+  db.run('INSERT INTO conversations (id, user_id, title) VALUES (?, ?, ?)',
+    [id, req.user.userId, title || 'New Chat']);
+  saveDb();
+  res.json({ success: true, id, title: title || 'New Chat' });
+});
+
+app.get('/api/conversations', authMiddleware, (req, res) => {
+  const uid = parseInt(req.user.userId, 10);
+  // sql.js db.exec doesn't support parameters, concat safely
+  const rows = db.exec("SELECT id, title, session_id, created_at, updated_at FROM conversations WHERE user_id = " + uid + " ORDER BY updated_at DESC");
+  const convs = rows.length && rows[0].values
+    ? rows[0].values.map(v => ({ id: v[0], title: v[1], session_id: v[2], created_at: v[3], updated_at: v[4] }))
+    : [];
+  res.json({ conversations: convs });
+});
+
+app.put('/api/conversations/:id', authMiddleware, (req, res) => {
+  const { title } = req.body || {};
+  db.run('UPDATE conversations SET title = ?, updated_at = datetime(?) WHERE id = ? AND user_id = ?',
+    [title, new Date().toISOString(), req.params.id, req.user.userId]);
+  saveDb();
+  res.json({ success: true });
+});
+
+app.delete('/api/conversations/:id', authMiddleware, (req, res) => {
+  db.run('DELETE FROM conversations WHERE id = ? AND user_id = ?',
+    [req.params.id, req.user.userId]);
+  saveDb();
+  res.json({ success: true });
+});
+
+// ─── Messages API ───────────────────────────────────────────────────────────────
+app.get('/api/messages/:conversationId', authMiddleware, (req, res) => {
+  const uid = parseInt(req.user.userId, 10);
+  const convId = req.params.conversationId.replace(/'/g, "''");
+  const rows = db.exec("SELECT role, content, created_at FROM messages WHERE conversation_id = '" + convId + "' AND user_id = " + uid + " ORDER BY id ASC");
+  const msgs = rows.length && rows[0].values
+    ? rows[0].values.map(v => ({ role: v[0], content: v[1], created_at: v[2] }))
+    : [];
+  res.json({ messages: msgs });
+});
+
+app.post('/api/messages/:conversationId', authMiddleware, (req, res) => {
+  const { role, content } = req.body || {};
+  if (!role || !content) return res.status(400).json({ error: 'role and content required' });
+  const convId = req.params.conversationId.replace(/'/g, "''");
+  db.run("INSERT INTO messages (conversation_id, user_id, role, content) VALUES ('" + convId + "', " + parseInt(req.user.userId, 10) + ", '" + role + "', '" + content.replace(/'/g, "''") + "')");
+  saveDb();
+  res.json({ success: true });
+});
+
+// ─── Image serving ──────────────────────────────────────────────────────────────
+app.get('/api/image', authMiddleware, (req, res) => {
+  const filePath = req.query.path || '';
+  const userDir = path.join(USERS_OUTPUT_DIR, req.user.username);
+  const full = path.resolve(path.join(userDir, filePath));
+  if (!full.startsWith(userDir)) return res.status(403).end();
+  if (!fs.existsSync(full)) return res.status(404).end();
+  const ext = path.extname(full).toLowerCase();
+  const mime = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.svg': 'image/svg+xml', '.pdf': 'application/pdf', '.webp': 'image/webp' };
+  res.type(mime[ext] || 'application/octet-stream').sendFile(full);
+});
+
+// ─── File browsing & download ──────────────────────────────────────────────────
+const USERS_OUTPUT_DIR = path.resolve(process.env.USERS_OUTPUT_DIR || '/root/output');
+
+app.get('/api/browse', authMiddleware, (req, res) => {
+  const sub = req.query.path || '';
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  // Disallow paths that try to escape the user directory
+  if (sub.includes('..') || sub.startsWith('/')) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  const target = path.resolve(path.join(userDir, sub));
+  if (!target.startsWith(userDir)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  try {
+    if (!fs.existsSync(target)) return res.json({ files: [], currentPath: sub || '/' });
+    const items = fs.readdirSync(target).filter(f => !f.startsWith('.'));
+    const files = items.map(f => {
+      const full = path.join(target, f);
+      const stat = fs.statSync(full);
+      return { name: f, size: stat.size, mtime: stat.mtime, isDir: stat.isDirectory(), isFile: stat.isFile() };
+    });
+    files.sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+    res.json({ files, currentPath: sub || '/' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/download', (req, res) => {
+  const filePath = req.query.path || '';
+  const token = req.query.token || req.headers['authorization']?.slice(7);
+  if (!token) return res.status(401).json({ error: 'Auth required' });
+  const user = validateAuthToken(token);
+  if (!user) return res.status(401).json({ error: 'Invalid token' });
+
+  const userDir = path.join(USERS_OUTPUT_DIR, user.username);
+  const full = path.resolve(path.join(userDir, filePath));
+  if (!full.startsWith(userDir)) return res.status(403).json({ error: 'Access denied' });
+  if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return res.status(404).json({ error: 'Not found' });
+  res.download(full, path.basename(full));
+});
+
+// Serve frontend (static)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// ─── WebSocket ───────────────────────────────────────────────────────────────
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+// Message queue: process one user's Claude turn at a time
+let processingQueue = false;
+const messageQueue = [];
+const runningProcs = new Map(); // userId -> proc
+
+function processNext() {
+  if (processingQueue || messageQueue.length === 0) return;
+  processingQueue = true;
+
+  const { user, message, conversationId, ws, send } = messageQueue.shift();
+  runClaudeForUser(user, message, conversationId, ws, send).finally(() => {
+    processingQueue = false;
+    processNext();
+  });
+}
+
+function queueClaudeRun(user, message, conversationId, ws, send) {
+  messageQueue.push({ user, message, conversationId, ws, send });
+  processNext();
+}
+
+// ─── Helper: save message to database ───────────────────────────────────────────
+function saveMessage(conversationId, userId, role, content) {
+  try {
+    const cid = (conversationId || '').replace(/'/g, "''");
+    const uid = parseInt(userId, 10);
+    const safeContent = (content || '').replace(/'/g, "''");
+    db.run("INSERT INTO messages (conversation_id, user_id, role, content) VALUES ('" + cid + "', " + uid + ", '" + role + "', '" + safeContent + "')");
+    saveDb();
+  } catch(e) { /* silent */ }
+}
+
+async function runClaudeForUser(user, message, conversationId, ws, send) {
+  const s = conversationId ? (data) => send({ ...data, conversation_id: conversationId }) : send;
+  s({ type: 'user_message', content: message });
+
+  // Save user message server-side
+  if (conversationId) {
+    saveMessage(conversationId, user.userId, 'user', message);
+  }
+
+  const args = [
+    '--print',
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--permission-mode', 'auto',
+    '--append-system-prompt', '你是小云，一位专业的人工智能科研助手。重要规则：1.用相对路径保存文件到当前目录 2.输出的图片、表格、报告都保存在当前目录 3.不要使用/root/开头的绝对路径',
+  ];
+
+  // Resume from user's last session if they have one
+  if (user.sessionId) {
+    args.push('--resume', user.sessionId);
+  }
+
+  s({ type: 'status', content: 'Claude is thinking...' });
+
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      const userOutputDir = path.join(USERS_OUTPUT_DIR, user.username, 'output');
+      const userUploadDir = path.join(USERS_OUTPUT_DIR, user.username, 'uploads');
+      if (!fs.existsSync(userOutputDir)) fs.mkdirSync(userOutputDir, { recursive: true });
+      if (!fs.existsSync(userUploadDir)) fs.mkdirSync(userUploadDir, { recursive: true });
+
+      proc = spawn(CLAUDE_CMD, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: userOutputDir,
+        env: { ...process.env },
+        timeout: 600000,
+      });
+      runningProcs.set(user.userId, proc);
+    } catch (err) {
+  s({ type: 'error', content: `Failed to start Claude: ${err.message}` });
+      return resolve();
+    }
+
+    let buf = '';
+    let beforeFiles;
+    let assistantText = '';
+    try { beforeFiles = new Set(fs.readdirSync('/root').filter(f => !f.startsWith('.'))); } catch(e) {}
+
+    proc.stdout.on('data', (chunk) => {
+      buf += chunk.toString();
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (!line.trim()) continue;
+        try {
+          const ev = JSON.parse(line);
+          // Track assistant text for persistence
+          if (ev.type === 'assistant' && ev.message && ev.message.content) {
+            for (const c of ev.message.content) {
+              if (c.type === 'text') assistantText += c.text || '';
+            }
+          }
+          handleStreamEvent(ev, s, user);
+        } catch { /* skip non-JSON lines */ }
+      }
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      const t = chunk.toString().trim();
+      if (t && !t.includes('Ignoring')) s({ type: 'status', content: t });
+    });
+
+    proc.on('close', (code) => {
+  s({ type: 'status', content: `Done (exit: ${code})` });
+      runningProcs.delete(user.userId);
+      // Save assistant response to database
+      if (conversationId && assistantText) {
+        saveMessage(conversationId, user.userId, 'assistant', assistantText);
+      }
+      // If Claude failed, clear stale session_id so next attempt starts fresh
+      if (code !== 0 && user.sessionId) {
+        user.sessionId = null;
+        updateUserSessionId(user.userId, null);
+      }
+      // Copy files Claude saved to /root/ (with absolute paths) into user's directory
+      try {
+        if (beforeFiles) {
+          const userDir = path.join(USERS_OUTPUT_DIR, user.username);
+          const imageExts = new Set(['png','jpg','jpeg','gif','svg','webp','pdf','csv','tsv','xlsx','html','json','txt','md','py','r','sh','yaml','yml','xml','fasta','fa','fastq','vcf','bam','sam']);
+          for (const f of fs.readdirSync('/root').filter(f => !f.startsWith('.'))) {
+            if (beforeFiles.has(f)) continue;
+            const ext = path.extname(f).toLowerCase().replace('.','');
+            if (!imageExts.has(ext)) continue;
+            const src = path.join('/root', f);
+            const dst = path.join(userDir, f);
+            if (fs.existsSync(src) && fs.statSync(src).isFile()) {
+              fs.copyFileSync(src, dst);
+            }
+          }
+        }
+      } catch(e) { /* silent */ }
+      resolve();
+    });
+
+    proc.on('error', (err) => {
+  s({ type: 'error', content: `Process error: ${err.message}` });
+      runningProcs.delete(user.userId);
+      resolve();
+    });
+
+    // Send user message
+    proc.stdin.write(message + '\n');
+    proc.stdin.end();
+  });
+}
+
+function handleStreamEvent(ev, send, user) {
+  switch (ev.type) {
+    case 'system':
+      if (ev.subtype === 'init') {
+        send({ type: 'system', content: 'Claude Code ready' });
+      } else if (ev.subtype === 'thinking_tokens') {
+        send({ type: 'thinking_progress', tokens: ev.estimated_tokens || 0 });
+      }
+      break;
+
+    case 'assistant': {
+      const m = ev.message;
+      if (!m || !m.content) break;
+      for (const c of m.content) {
+        switch (c.type) {
+          case 'thinking':
+            send({ type: 'thinking', content: c.thinking || '' });
+            break;
+          case 'text':
+            send({ type: 'text', content: c.text || '' });
+            break;
+          case 'tool_use':
+            send({ type: 'tool_use', name: c.name || 'unknown', input: c.input || {} });
+            break;
+        }
+      }
+      break;
+    }
+
+    case 'result':
+      // Save session_id for resume — this is how we isolate per-user sessions
+      if (ev.session_id && user.userId) {
+        user.sessionId = ev.session_id;
+        updateUserSessionId(user.userId, ev.session_id);
+      }
+      send({
+        type: 'turn_complete',
+        usage: ev.usage || {},
+        cost_usd: ev.total_cost_usd || 0,
+        duration_ms: ev.duration_ms || 0,
+        stop_reason: ev.stop_reason,
+        result: ev.result || null,
+      });
+      break;
+  }
+}
+
+// ─── WebSocket connections ───────────────────────────────────────────────────
+wss.on('connection', (ws) => {
+  let authenticatedUser = null;
+
+  // WebSocket keepalive — ping every 25s to prevent Cloudflare 60s timeout
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === ws.OPEN) ws.ping();
+    else clearInterval(pingInterval);
+  }, 25000);
+
+  const send = (data) => {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify(data));
+    } else {
+      console.error('[WS] Cannot send (state:', ws.readyState, 'type:', data.type, ')');
+    }
+  };
+
+  ws.on('message', async (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return send({ type: 'error', content: 'Invalid JSON' }); }
+
+    // Auth via token
+    if (msg.type === 'auth') {
+      const user = validateAuthToken(msg.token);
+      if (user) {
+        authenticatedUser = user;
+        send({ type: 'auth_ok', username: user.username });
+      } else {
+        send({ type: 'auth_error', message: 'Invalid or expired token' });
+      }
+      return;
+    }
+
+    if (!authenticatedUser) return send({ type: 'auth_required' });
+
+    // Message from user
+    if (msg.type === 'message') {
+      queueClaudeRun(authenticatedUser, msg.content || '', msg.conversation_id || null, ws, send);
+      return;
+    }
+
+    // Cancel
+    if (msg.type === 'cancel') {
+      const proc = runningProcs.get(authenticatedUser.userId);
+      if (proc) {
+        proc.kill('SIGTERM');
+        runningProcs.delete(authenticatedUser.userId);
+        send({ type: 'status', content: 'Cancelled' });
+      } else {
+        send({ type: 'status', content: 'No running process' });
+      }
+      return;
+    }
+
+    // Clear session (start fresh conversation)
+    if (msg.type === 'clear') {
+      authenticatedUser.sessionId = null;
+      if (authenticatedUser.userId) {
+        updateUserSessionId(authenticatedUser.userId, null);
+      }
+      send({ type: 'status', content: 'Conversation cleared' });
+    }
+  });
+
+  ws.on('close', () => { clearInterval(pingInterval); });
+
+  send({ type: 'hello', version: '2.0.0' });
+});
+
+// ─── Start ───────────────────────────────────────────────────────────────────
+initDb().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`╔══════════════════════════════════════════════════════╗`);
+    console.log(`║        Yunsci  v2                                    ║`);
+    console.log(`╠══════════════════════════════════════════════════════╣`);
+    console.log(`║  URL:      http://yunsci.dpdns.org:${PORT}            `);
+    console.log(`║  Storage:  ${DB_PATH}`);
+    console.log(`║  Uploads:  ${UPLOAD_DIR}`);
+    console.log(`║  Users:    ${db.exec('SELECT COUNT(*) FROM users')[0]?.values[0]?.[0] || 0} registered`);
+    console.log(`║  Secret:   ${SECRET === 'dev-only-change-in-production' ? '⚠️  DEFAULT (set SECRET env)' : '✅ Custom'}`);
+    console.log(`╚══════════════════════════════════════════════════════╝`);
+  });
+});

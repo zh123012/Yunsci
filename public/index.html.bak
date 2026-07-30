@@ -1,0 +1,968 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Yunsci — Bioinfo & Research</title>
+<link rel="stylesheet" href="/vendor/github.min.css">
+<script src="/vendor/highlight.min.js"></script>
+<script src="/vendor/marked.min.js"></script>
+<style>
+/* ── Reset & Variables ────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root {
+  --bg: #ffffff; --bg2: #f6f8fa; --bg3: #e8ecf0; --bg4: #d0d7de;
+  --border: #d0d7de; --text: #1f2328; --text2: #656d76; --text3: #8b949e;
+  --accent: #0969da; --accent2: #218bff; --green: #1a7f37; --red: #cf222e;
+  --orange: #bf8700; --purple: #8250df; --user: #0969da;
+  --font: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,sans-serif;
+  --mono: 'Cascadia Code','Fira Code','JetBrains Mono',Consolas,monospace;
+  --r: 8px; --rl: 12px; --mw: 850px;
+}
+html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--text)}
+a{color:var(--accent)}a:hover{text-decoration:underline}
+
+/* ── Auth Pages ───────────────────────────────────────── */
+.auth-screen{
+  position:fixed;inset:0;z-index:1000;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--bg);overflow-y:auto;padding:20px
+}
+.auth-screen.hidden{display:none}
+.auth-card{
+  background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--rl);padding:40px;width:400px;max-width:100%;
+  box-shadow:0 1px 3px rgba(0,0,0,.3)
+}
+.auth-card h1{
+  font-size:24px;margin-bottom:4px;
+  background:linear-gradient(135deg,#0969da,#1a7f37);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  background-clip:text
+}
+.auth-card h2{font-size:20px;margin-bottom:4px;color:var(--text)}
+.auth-card .subtitle{color:var(--text2);margin-bottom:24px;font-size:14px}
+.auth-card label{display:block;font-size:13px;color:var(--text2);margin-bottom:4px;margin-top:12px}
+.auth-card label:first-of-type{margin-top:0}
+.auth-card input[type=text],.auth-card input[type=password]{
+  width:100%;padding:10px 14px;background:var(--bg3);border:1px solid var(--border);
+  border-radius:var(--r);color:var(--text);font-size:15px;outline:none;transition:border-color .2s
+}
+.auth-card input:focus{border-color:var(--accent)}
+.auth-card .btn-primary{
+  width:100%;margin-top:16px;padding:10px;background:var(--accent);color:#fff;
+  border:none;border-radius:var(--r);font-size:15px;cursor:pointer;font-weight:600;
+  transition:background .2s
+}
+.auth-card .btn-primary:hover{background:var(--accent2)}
+.auth-card .btn-primary:disabled{opacity:.5;cursor:not-allowed}
+.auth-card .auth-switch{text-align:center;margin-top:12px;font-size:13px;color:var(--text2)}
+.auth-card .auth-switch a{cursor:pointer;color:var(--accent)}
+.auth-card .auth-switch a:hover{text-decoration:underline}
+.auth-error{color:var(--red);font-size:13px;margin-top:8px;display:none}
+.auth-error.show{display:block}
+.auth-success{color:var(--green);font-size:13px;margin-top:8px;display:none}
+.auth-success.show{display:block}
+
+/* ── App Layout ───────────────────────────────────────── */
+#app{display:none;flex-direction:column;height:100vh}
+#app.show{display:flex}
+
+/* ── Header ───────────────────────────────────────────── */
+.header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 20px;background:var(--bg2);border-bottom:1px solid var(--border);
+  flex-shrink:0
+}
+.header-left{display:flex;align-items:center;gap:12px}
+.header-logo{
+  width:32px;height:32px;border-radius:50%;
+  background:linear-gradient(135deg,#0969da,#1a7f37);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:bold;font-size:16px;flex-shrink:0
+}
+.header-title{font-size:16px;font-weight:600}
+.header-subtitle{font-size:12px;color:var(--text3)}
+.header-center{flex:1;text-align:center;font-size:12px;color:var(--text3)}
+.header-actions{display:flex;gap:8px;align-items:center}
+.header-actions button{
+  background:var(--bg3);border:1px solid var(--border);color:var(--text2);
+  border-radius:var(--r);padding:6px 12px;font-size:12px;cursor:pointer;transition:all .2s;white-space:nowrap
+}
+.header-actions button:hover{background:var(--bg4);color:var(--text)}
+.status-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.status-dot.idle{background:var(--green)}
+.status-dot.busy{animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.cost-badge{font-size:11px;color:var(--text3);background:var(--bg3);padding:2px 8px;border-radius:10px}
+.upload-btn{position:relative;overflow:hidden}
+.upload-btn input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer}
+
+/* ── Messages ─────────────────────────────────────────── */
+.messages{flex:1;overflow-y:auto;padding:20px 0}
+.messages-inner{max-width:var(--mw);margin:0 auto;padding:0 20px}
+
+.message{margin-bottom:24px}
+.message-header{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px}
+.message-avatar{
+  width:28px;height:28px;border-radius:50%;display:flex;
+  align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0
+}
+.message-avatar.user{background:var(--user);color:#fff}
+.message-avatar.assistant{background:linear-gradient(135deg,#0969da,#1a7f37);color:#fff}
+.message-name{font-weight:600}
+.message-time{color:var(--text3);font-size:11px}
+
+.message-body{
+  padding:12px 16px;border-radius:var(--rl);line-height:1.6;font-size:14px;overflow-wrap:break-word
+}
+.message-body.user{
+  background:var(--user);color:#fff;
+  border-bottom-right-radius:4px;max-width:80%;margin-left:auto
+}
+.message-body.assistant{
+  background:var(--bg2);border:1px solid var(--border);border-bottom-left-radius:4px
+}
+.message-body.system{background:transparent;color:var(--text2);font-size:13px;text-align:center;padding:4px 8px}
+
+/* ── Thinking ─────────────────────────────────────────── */
+.thinking-block{background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);margin:8px 0;overflow:hidden}
+.thinking-toggle{padding:6px 12px;font-size:12px;color:var(--text3);cursor:pointer;display:flex;align-items:center;gap:6px;user-select:none}
+.thinking-toggle:hover{color:var(--text2)}
+.thinking-toggle .arrow{transition:transform .2s;display:inline-block}
+.thinking-toggle .arrow.open{transform:rotate(90deg)}
+.thinking-content{padding:0 12px 8px;font-size:12px;color:var(--text3);font-style:italic;line-height:1.5;display:none;max-height:300px;overflow-y:auto;white-space:pre-wrap;font-family:var(--mono)}
+.thinking-content.open{display:block}
+
+/* ── Tool call ────────────────────────────────────────── */
+.tool-block{background:var(--bg3);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--r);margin:8px 0;overflow:hidden}
+.tool-header{padding:6px 12px;font-size:12px;color:var(--accent);cursor:pointer;display:flex;align-items:center;gap:6px;font-family:var(--mono);user-select:none}
+.tool-header:hover{background:var(--bg4)}
+.tool-header .arrow{transition:transform .2s;display:inline-block}
+.tool-header .arrow.open{transform:rotate(90deg)}
+.tool-input{padding:8px 12px;font-size:12px;background:var(--bg);color:var(--text2);font-family:var(--mono);white-space:pre-wrap;display:none;border-top:1px solid var(--border);max-height:200px;overflow:auto}
+.tool-input.open{display:block}
+
+.thinking-bar{margin:8px 0;padding:8px 12px;background:var(--bg3);border-radius:var(--r);display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text3)}
+.thinking-bar .spinner{width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.streaming-cursor:after{content:'▊';animation:blink 1s step-end infinite;color:var(--accent);margin-left:2px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── Markdown ─────────────────────────────────────────── */
+.text-content{white-space:pre-wrap;line-height:1.7}
+.text-content p{margin-bottom:4px}
+.text-content p:last-child{margin-bottom:0}
+.message-body.assistant pre{background:var(--bg);border:1px solid var(--border);border-radius:var(--r);padding:12px;margin:8px 0;overflow-x:auto;position:relative}
+.message-body.assistant pre code{font-family:var(--mono);font-size:13px;line-height:1.5;background:none;padding:0}
+.message-body.assistant code{background:var(--bg3);padding:2px 6px;border-radius:4px;font-size:13px;font-family:var(--mono)}
+.message-body.assistant p{margin-bottom:8px}
+.message-body.assistant p:last-child{margin-bottom:0}
+.message-body.assistant ul,.message-body.assistant ol{padding-left:20px;margin:8px 0}
+.message-body.assistant h1,.message-body.assistant h2,.message-body.assistant h3,.message-body.assistant h4{margin:16px 0 8px;color:var(--accent)}
+.message-body.assistant h1{font-size:18px}
+.message-body.assistant h2{font-size:16px}
+.message-body.assistant h3{font-size:15px}
+.message-body.assistant blockquote{border-left:3px solid var(--accent);padding-left:12px;color:var(--text2);margin:8px 0}
+.message-body.assistant table{border-collapse:collapse;margin:8px 0;width:100%;font-size:13px}
+.message-body.assistant th,.message-body.assistant td{border:1px solid var(--border);padding:6px 10px;text-align:left}
+.message-body.assistant th{background:var(--bg3);font-weight:600}
+.copy-btn{position:absolute;top:6px;right:6px;background:var(--bg3);border:1px solid var(--border);color:var(--text3);border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;opacity:0;transition:opacity .2s}
+pre:hover .copy-btn{opacity:1}.copy-btn:hover{background:var(--bg4);color:var(--text)}
+
+/* ── Input ────────────────────────────────────────────── */
+.input-area{flex-shrink:0;border-top:1px solid var(--border);background:var(--bg2);padding:12px 20px}
+.input-inner{max-width:var(--mw);margin:0 auto;display:flex;gap:8px}
+.input-inner textarea{
+  flex:1;resize:vertical;background:var(--bg3);border:1px solid var(--border);
+  border-radius:var(--r);padding:14px 16px;color:var(--text);font-size:15px;
+  font-family:var(--mono);outline:none;min-height:64px;max-height:300px;line-height:1.6;transition:border-color .2s
+}
+.input-inner textarea:focus{border-color:var(--accent)}
+.input-inner textarea::placeholder{color:var(--text3)}
+.input-inner button{
+  background:var(--accent);color:#fff;border:none;border-radius:var(--r);
+  width:50px;height:50px;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;transition:background .2s;flex-shrink:0;align-self:flex-end
+}
+.input-inner button:hover{background:var(--accent2)}
+.input-inner button:disabled{opacity:.4;cursor:not-allowed}
+.input-inner button svg{width:22px;height:22px}
+.input-hint{max-width:var(--mw);margin:4px auto 0;padding:0 4px;font-size:11px;color:var(--text3);display:flex;justify-content:space-between}
+
+/* ── Welcome ──────────────────────────────────────────── */
+.welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:var(--text3);text-align:center}
+.welcome-icon{font-size:48px;margin-bottom:16px;width:80px;height:80px;border-radius:50%;background:var(--bg2);border:1px solid var(--border);display:flex;align-items:center;justify-content:center}
+.welcome h2{color:var(--text);margin-bottom:8px;font-size:20px}
+.welcome p{max-width:500px;line-height:1.6;font-size:14px}
+.welcome .features{display:flex;gap:24px;margin-top:24px;flex-wrap:wrap;justify-content:center}
+.welcome .feature{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;font-size:13px;min-width:120px}
+.welcome .feature-label{color:var(--text2);font-size:11px}
+.welcome .feature-value{color:var(--accent);margin-top:4px}
+
+/* ── Scrollbar ────────────────────────────────────────── */
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--text3)}
+
+/* ── Skill Popup ──────────────────────────────────────── */
+.skill-popup{position:absolute;bottom:100%;left:0;right:0;max-height:240px;overflow-y:auto;background:var(--bg2);border:1px solid var(--border);border-radius:var(--rl);box-shadow:0 -4px 12px rgba(0,0,0,.15);display:none;z-index:300;margin-bottom:4px}
+.skill-popup.show{display:block}
+.skill-item{padding:8px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;border-bottom:1px solid var(--border);transition:background .1s}
+.skill-item:last-child{border-bottom:none}
+.skill-item:hover,.skill-item.active{background:var(--bg3)}
+.skill-item .skill-name{font-weight:600;color:var(--accent);font-family:var(--mono);font-size:12px;white-space:nowrap}
+.skill-item .skill-desc{color:var(--text2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.skill-item .skill-badge{background:var(--accent);color:#fff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600}
+.skill-empty{padding:16px;text-align:center;color:var(--text3);font-size:13px}
+.input-wrapper{position:relative;flex:1}
+
+/* ── File Browser ─────────────────────────────────────── */
+.file-panel{display:block;border-bottom:1px solid var(--border);background:var(--bg2)}
+.file-panel.collapsed .file-body{display:none}
+.file-bar{display:flex;align-items:center;gap:6px;padding:4px 14px;background:var(--bg3);font-size:12px;color:var(--text);cursor:pointer;user-select:none;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50;min-height:28px}
+.file-bar:hover{background:var(--bg4)}
+.file-bar .arrow{transition:transform .2s;display:inline-block}
+.file-bar .arrow.open{transform:rotate(90deg)}
+.file-bar .file-count{color:var(--text3);margin-left:auto;font-size:11px}
+.file-body{max-height:240px;overflow-y:auto;padding:4px 0}
+.file-item{display:flex;align-items:center;gap:8px;padding:5px 16px;font-size:12px;cursor:pointer;transition:background .1s}
+.file-item:hover{background:var(--bg3)}
+.file-item .file-icon{flex-shrink:0;width:16px;text-align:center}
+.file-item .file-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)}
+.file-item .file-size{color:var(--text3);font-size:11px;white-space:nowrap}
+.file-item .file-dl{color:var(--accent);font-size:11px;padding:2px 6px;border-radius:4px;visibility:hidden}
+.file-item:hover .file-dl{visibility:visible}
+.file-item .file-dl:hover{background:var(--bg4)}
+.file-nav{display:flex;align-items:center;gap:6px;padding:4px 16px;font-size:11px;color:var(--text3)}
+.file-nav span{cursor:pointer;color:var(--accent)}
+.file-nav span:hover{text-decoration:underline}
+.file-nav .sep{color:var(--text3);cursor:default}
+.file-path-bar{display:flex;align-items:center;gap:4px;padding:4px 16px;font-size:11px;color:var(--text3);background:var(--bg3)}
+.file-path-bar .seg{cursor:pointer}
+.file-path-bar .seg:hover{color:var(--accent);text-decoration:underline}
+
+/* ── Toast ────────────────────────────────────────────── */
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:var(--r);font-size:13px;z-index:200;opacity:0;transition:opacity .3s;pointer-events:none}
+.toast.show{opacity:1}
+
+@media(max-width:640px){
+  .header{padding:8px 12px}
+  .messages{padding:12px 0}
+  .messages-inner{padding:0 12px}
+  .input-area{padding:8px 12px}
+  .auth-card{padding:24px}
+  .header-actions .cost-badge,.header-actions .upload-btn span{display:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ AUTH SCREEN ═══════════ -->
+<div id="auth-screen" class="auth-screen">
+  <div id="auth-card" class="auth-card">
+    <!-- Login form (default) -->
+    <div id="login-form">
+      <h1>Yunsci</h1>
+<!-- v4 -->
+      <p class="subtitle">Web interface for bioinformatics · research · data analysis</p>
+      <label>Username</label>
+      <input type="text" id="login-username" placeholder="Enter username" autocomplete="username">
+      <label>Password</label>
+      <input type="password" id="login-password" placeholder="Enter password" autocomplete="current-password">
+      <div class="auth-error" id="login-error"></div>
+      <button class="btn-primary" id="login-btn" onclick="doLogin()">Log In</button>
+      <div class="auth-switch">Don't have an account? <a onclick="showRegister()">Register</a></div>
+    </div>
+
+    <!-- Register form (hidden) -->
+    <div id="register-form" style="display:none">
+      <h2>Create Account</h2>
+      <p class="subtitle">Join the Yunsci research environment</p>
+      <label>Username</label>
+      <input type="text" id="reg-username" placeholder="Choose a username (letters, numbers, underscores)" autocomplete="off">
+      <label>Password</label>
+      <input type="password" id="reg-password" placeholder="At least 6 characters" autocomplete="new-password">
+      <label>Confirm Password</label>
+      <input type="password" id="reg-confirm" placeholder="Repeat password" autocomplete="new-password">
+      <div class="auth-error" id="reg-error"></div>
+      <div class="auth-success" id="reg-success"></div>
+      <button class="btn-primary" id="reg-btn" onclick="doRegister()">Register</button>
+      <div class="auth-switch">Already have an account? <a onclick="showLogin()">Log In</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ MAIN APP ═══════════ -->
+<div id="app">
+  <div class="header">
+    <div class="header-left">
+      <div class="header-logo">Y</div>
+      <div>
+        <div class="header-title">Yunsci</div>
+        <div class="header-subtitle"><span class="status-dot idle" id="status-dot"></span> <span id="status-text">Ready</span></div>
+      </div>
+    </div>
+    <div class="header-center">🧬 <span id="header-username"></span></div>
+    <div class="header-actions">
+      <span class="cost-badge" id="cost-badge">$0.00</span>
+      <button class="upload-btn">
+        <span>📁</span> Upload
+        <input type="file" id="file-input" multiple onchange="uploadFiles(event)">
+      </button>
+      <button onclick="clearHistory()" title="Clear conversation">🗑️</button>
+      <button onclick="doLogout()" title="Log out">🚪</button>
+    </div>
+  </div>
+
+  <!-- File Browser Panel -->
+  <div class="file-panel" id="file-panel">
+    <div class="file-bar" id="file-bar" onclick="toggleFilePanel()">
+      <span class="arrow" id="file-arrow">▼</span> 📁 Files
+      <span class="file-count" id="file-count"></span>
+    </div>
+    <div class="file-body" id="file-body">
+      <div class="file-nav">
+        <span onclick="browseFiles('/output')">📂 /output</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="messages-inner" id="messages-inner">
+      <div class="welcome" id="welcome">
+        <div class="welcome-icon">🧬</div>
+        <h2>Yunsci</h2>
+        <p>Full AI-assisted environment for bioinformatics analysis,<br>
+        data processing, and research computing — right from your browser.</p>
+        <div class="features">
+          <div class="feature"><div class="feature-label">Tools</div><div class="feature-value">Bash · Read · Write</div></div>
+          <div class="feature"><div class="feature-label">Skills</div><div class="feature-value">50+ bioinfo skills</div></div>
+          <div class="feature"><div class="feature-label">Files</div><div class="feature-value">Upload via browser</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="input-area">
+    <div class="input-inner">
+      <div class="input-wrapper">
+        <textarea id="input" rows="1" placeholder='Ask Yunsci to analyze data, write code, or run an analysis… Type "/" for skills' onkeydown="handleKey(event)" oninput="handleSkillInput(event)"></textarea>
+        <div class="skill-popup" id="skill-popup"></div>
+      </div>
+      <button id="send-btn" onclick="sendMessage()" title="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="22" y1="2" x2="11" y2="13"></line>
+          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+      </button>
+    </div>
+    <div class="input-hint">
+      <span>Enter to send · Shift+Enter for new line · Output in 📁 /output</span>
+      <span id="upload-status"></span>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+// Yunsci frontend JavaScript
+
+// ─── Markdown Setup ───────────────────────────────────────────────
+const renderer = new marked.Renderer();
+renderer.code = ({ text, lang }) => {
+  let highlighted = text;
+  try {
+    if (lang && hljs.getLanguage(lang)) highlighted = hljs.highlight(text, { language: lang }).value;
+  } catch(e) {}
+  return `<pre><code class="hljs language-${lang||'plaintext'}">${highlighted}</code><button class="copy-btn" onclick="copyCode(this)">Copy</button></pre>`;
+};
+marked.setOptions({ renderer, breaks: true, gfm: true });
+
+// ─── State ─────────────────────────────────────────────────────────
+let ws = null;
+let authToken = localStorage.getItem('cc_token');
+let username = localStorage.getItem('cc_user');
+let isProcessing = false;
+let currentAssistantMsg = null;  // reference to the current assistant message DOM element
+let currentBuf = '';             // text buffer for current assistant response
+let assistantBody = null;        // reference to message-body div in current message
+
+// ─── DOM shortcuts ─────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const sendBtn = $('send-btn');
+const input = $('input');
+
+// ═══════════════════════════════════════════════════════════════════
+// Auth
+// ═══════════════════════════════════════════════════════════════════
+function showRegister() {
+  $('login-form').style.display = 'none';
+  $('register-form').style.display = 'block';
+  $('auth-card').querySelector('h1').style.display = 'none';
+  $('reg-error').classList.remove('show');
+}
+function showLogin() {
+  $('login-form').style.display = 'block';
+  $('register-form').style.display = 'none';
+  $('auth-card').querySelector('h1').style.display = '';
+  $('reg-error').classList.remove('show');
+}
+
+async function doLogin() {
+  const u = $('login-username').value.trim();
+  const p = $('login-password').value.trim();
+  if (!u || !p) return showAuthError('login-error', 'Enter username and password');
+  $('login-btn').disabled = true;
+  $('login-error').classList.remove('show');
+  try {
+    const resp = await fetch('/api/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      authToken = data.token;
+      username = data.username;
+      localStorage.setItem('cc_token', authToken);
+      localStorage.setItem('cc_user', username);
+      enterApp();
+    } else {
+      showAuthError('login-error', data.error || 'Login failed');
+    }
+  } catch(e) {
+    showAuthError('login-error', 'Network error: ' + e.message);
+  }
+  $('login-btn').disabled = false;
+}
+
+async function doRegister() {
+  const u = $('reg-username').value.trim();
+  const pw = $('reg-password').value;
+  const confirm = $('reg-confirm').value;
+  $('reg-error').classList.remove('show');
+  $('reg-success').classList.remove('show');
+  if (!u || !pw) return showAuthError('reg-error', 'Fill in all fields');
+  if (pw.length < 6) return showAuthError('reg-error', 'Password must be at least 6 characters');
+  if (pw !== confirm) return showAuthError('reg-error', 'Passwords do not match');
+  if (!/^[a-zA-Z0-9_]+$/.test(u)) return showAuthError('reg-error', 'Letters, numbers, underscores only');
+  $('reg-btn').disabled = true;
+  try {
+    const resp = await fetch('/api/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: pw })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      $('reg-success').textContent = '✅ Registration successful! Logging you in...';
+      $('reg-success').classList.add('show');
+      authToken = data.token;
+      username = data.username;
+      localStorage.setItem('cc_token', authToken);
+      localStorage.setItem('cc_user', username);
+      setTimeout(enterApp, 500);
+    } else {
+      showAuthError('reg-error', data.error || 'Registration failed');
+    }
+  } catch(e) {
+    showAuthError('reg-error', 'Network error: ' + e.message);
+  }
+  $('reg-btn').disabled = false;
+}
+
+function doLogout() {
+  if (ws) { ws.close(); ws = null; }
+  localStorage.removeItem('cc_token');
+  localStorage.removeItem('cc_user');
+  authToken = null;
+  username = null;
+  $('app').classList.remove('show');
+  $('auth-screen').classList.remove('hidden');
+  $('login-username').value = '';
+  $('login-password').value = '';
+  $('login-username').focus();
+  $('messages-inner').innerHTML = '';
+  isProcessing = false;
+  sendBtn.disabled = false;
+  input.disabled = false;
+  fetch('/api/logout', { method: 'POST', headers: { 'Authorization': 'Bearer ' + (authToken || '') } }).catch(()=>{});
+}
+
+function showAuthError(id, msg) {
+  const el = $(id);
+  el.textContent = msg;
+  el.classList.add('show');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// App Entry
+// ═══════════════════════════════════════════════════════════════════
+function enterApp() {
+  $('auth-screen').classList.add('hidden');
+  $('app').classList.add('show');
+  $('header-username').textContent = username;
+  connectWebSocket();
+  browseFiles('');
+  input.focus();
+}
+
+function connectWebSocket() {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${protocol}//${location.host}`;
+  if (ws) { ws.close(); }
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+  };
+  ws.onmessage = (event) => {
+    try { handleMessage(JSON.parse(event.data)); }
+    catch(e) { console.error('Parse error:', e); }
+  };
+  ws.onclose = () => {
+    if (authToken) {
+      showToast('Connection lost. Reconnecting...');
+      setTimeout(connectWebSocket, 2000);
+    }
+  };
+  ws.onerror = () => showToast('WebSocket error');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Message Handler — SIMPLE & ROBUST
+// ═══════════════════════════════════════════════════════════════════
+function handleMessage(msg) {
+  console.log('[YUNSCI] Event:', msg.type, msg.content ? msg.content.substring(0,30) : '');
+  switch (msg.type) {
+
+    case 'auth_ok':
+      setStatus('Ready', 'idle');
+      break;
+
+    case 'auth_error':
+      showToast('Auth error: ' + (msg.message || 'Invalid token'));
+      doLogout();
+      break;
+
+    case 'user_message':
+      removeWelcome();
+      addUserMessage(msg.content);
+      isProcessing = true;
+      setStatus('Claude is thinking...', 'busy');
+      sendBtn.disabled = true;
+      input.disabled = true;
+      // Start new assistant message slot
+      startAssistantMsg();
+      break;
+
+    case 'thinking':
+      // Just show thinking status — content is in the thinking_progress
+      break;
+
+    case 'thinking_progress':
+      setStatus(`Thinking... (${msg.tokens} tokens)`, 'busy');
+      break;
+
+    case 'text': {
+// removed bad line
+      // Append text to current assistant message
+      if (!assistantBody) break;
+      currentBuf += (msg.content || '');
+      // Show raw text immediately (pre-wrap handles newlines)
+      assistantBody.textContent = currentBuf;
+      scrollToBottom();
+      break;
+    }
+
+    case 'tool_use':
+      setStatus(`Running ${msg.name}...`, 'busy');
+      // Show tool use info
+      if (assistantBody) {
+        const info = document.createElement('div');
+        info.style.cssText = 'font-size:12px;color:var(--accent);padding:4px 0;font-family:var(--mono)';
+        info.textContent = `🛠 ${msg.name}`;
+        assistantBody.appendChild(info);
+      }
+      break;
+
+    case 'status':
+      setStatus(msg.content, isProcessing ? 'busy' : 'idle');
+      break;
+
+    case 'turn_complete': {
+      isProcessing = false;
+      setStatus('Ready', 'idle');
+      sendBtn.disabled = false;
+      input.disabled = false;
+      input.focus();
+
+      // Render the final text as markdown
+      const finalText = msg.result || currentBuf || '';
+      if (assistantBody && finalText.trim()) {
+        try {
+          assistantBody.innerHTML = marked.parse(finalText);
+          assistantBody.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+        } catch(e) {
+          assistantBody.textContent = finalText;
+        }
+      }
+
+      // Show cost
+      if (msg.cost_usd) $('cost-badge').textContent = `$${msg.cost_usd.toFixed(4)}`;
+
+      // Cleanup
+      currentAssistantMsg = null;
+      assistantBody = null;
+      currentBuf = '';
+      scrollToBottom();
+      break;
+    }
+
+    case 'error':
+      showToast('Error: ' + msg.content);
+      if (isProcessing) {
+        isProcessing = false;
+        setStatus('Error', 'idle');
+        sendBtn.disabled = false;
+        input.disabled = false;
+        currentAssistantMsg = null;
+        assistantBody = null;
+        currentBuf = '';
+      }
+      break;
+
+    case 'hello':
+      break; // server greeting
+  }
+}
+
+// ─── UI: Messages ──────────────────────────────────────────────────
+function removeWelcome() {
+  const w = $('welcome');
+  if (w) w.remove();
+}
+
+function addUserMessage(text) {
+  const time = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'message';
+  div.innerHTML = `<div class="message-header" style="justify-content:flex-end"><span class="message-time">${time}</span><span class="message-name">You</span><div class="message-avatar user">U</div></div><div class="message-body user">${escapeHtml(text)}</div>`;
+  $('messages-inner').appendChild(div);
+  scrollToBottom();
+}
+
+function startAssistantMsg() {
+  console.log('[YUNSCI] startAssistantMsg called');
+  const time = new Date().toLocaleTimeString();
+  currentBuf = '';
+
+  const div = document.createElement('div');
+  div.className = 'message';
+  div.innerHTML = `<div class="message-header"><div class="message-avatar assistant">Y</div><span class="message-name">Yunsci</span><span class="message-time">${time}</span></div><div class="message-body assistant"></div>`;
+
+  $('messages-inner').appendChild(div);
+  currentAssistantMsg = div;
+  assistantBody = div.querySelector('.message-body');
+  scrollToBottom();
+}
+
+// ─── UI Helpers ───────────────────────────────────────────────────
+function toggleThinking(el) {
+  el.querySelector('.arrow').classList.toggle('open');
+  el.parentElement.querySelector('.thinking-content')?.classList.toggle('open');
+}
+
+function toggleTool(el) {
+  el.querySelector('.arrow').classList.toggle('open');
+  el.parentElement.querySelector('.tool-input')?.classList.toggle('open');
+}
+
+function setStatus(text, state) {
+  $('status-dot').className = `status-dot ${state}`;
+  $('status-text').textContent = text;
+}
+
+function scrollToBottom() {
+  requestAnimationFrame(() => { $('messages').scrollTop = $('messages').scrollHeight; });
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Skill Suggestions
+// ═══════════════════════════════════════════════════════════════════
+let skillList = [];
+let skillPopupIndex = -1;
+let skillFilter = '';
+
+async function loadSkills() {
+  try {
+    const resp = await fetch('/api/skills', {
+      headers: { 'Authorization': `Bearer ${authToken}` }
+    });
+    const data = await resp.json();
+    if (data.skills) skillList = data.skills;
+  } catch(e) {}
+}
+
+function handleSkillInput(e) {
+  const val = input.value;
+  const cursor = input.selectionStart;
+  const textBefore = val.substring(0, cursor);
+  const slashIdx = textBefore.lastIndexOf('/');
+  if (slashIdx >= 0 && (slashIdx === 0 || val[slashIdx - 1] === ' ')) {
+    skillFilter = textBefore.substring(slashIdx + 1);
+    showSkillPopup(slashIdx);
+  } else {
+    hideSkillPopup();
+  }
+}
+
+function showSkillPopup(slashIdx) {
+  const popup = $('skill-popup');
+  const filtered = skillList.filter(s =>
+    !skillFilter || s.name.toLowerCase().includes(skillFilter.toLowerCase())
+  );
+  if (!filtered.length) {
+    popup.innerHTML = '<div class="skill-empty">No matching skills</div>';
+    popup.classList.add('show');
+    skillPopupIndex = -1;
+    return;
+  }
+  popup.innerHTML = filtered.map((s, i) =>
+    `<div class="skill-item${i === 0 ? ' active' : ''}" data-idx="${i}" onclick="selectSkill(${i})">
+      <span class="skill-name">/${s.name}</span>
+      <span class="skill-desc">${escapeHtml(s.description || '')}</span>
+    </div>`
+  ).join('');
+  popup.classList.add('show');
+  skillPopupIndex = 0;
+  popup._slashIdx = slashIdx;
+}
+
+function hideSkillPopup() {
+  $('skill-popup').classList.remove('show');
+  skillPopupIndex = -1;
+}
+
+function selectSkill(idx) {
+  const popup = $('skill-popup');
+  const slashIdx = popup._slashIdx || 0;
+  const filtered = skillList.filter(s =>
+    !skillFilter || s.name.toLowerCase().includes(skillFilter.toLowerCase())
+  );
+  if (!filtered[idx]) return;
+  const before = input.value.substring(0, slashIdx);
+  const after = input.value.substring(input.selectionStart);
+  input.value = before + '/' + filtered[idx].name + ' ' + after;
+  input.selectionStart = input.selectionEnd = (before + '/' + filtered[idx].name + ' ').length;
+  hideSkillPopup();
+  input.focus();
+}
+
+function navigateSkillPopup(dir) {
+  const popup = $('skill-popup');
+  if (!popup.classList.contains('show')) return false;
+  const items = popup.querySelectorAll('.skill-item');
+  if (!items.length) return true;
+  items.forEach(i => i.classList.remove('active'));
+  skillPopupIndex = (skillPopupIndex + dir + items.length) % items.length;
+  items[skillPopupIndex].classList.add('active');
+  items[skillPopupIndex].scrollIntoView({ block: 'nearest' });
+  return true;
+}
+
+loadSkills();
+
+// ═══════════════════════════════════════════════════════════════════
+// File Browser
+// ═══════════════════════════════════════════════════════════════════
+let currentBrowsePath = '';
+let currentFiles = [];
+
+function toggleFilePanel() {
+  $('file-panel').classList.toggle('collapsed');
+  $('file-arrow').textContent = $('file-panel').classList.contains('collapsed') ? '▶' : '▼';
+  if (!$('file-panel').classList.contains('collapsed') && currentFiles.length === 0) {
+    browseFiles('');
+  }
+}
+
+async function browseFiles(subPath) {
+  const body = $('file-body');
+  body.innerHTML = '<div class="file-nav" style="padding:12px;text-align:center;color:var(--text3)">Loading...</div>';
+  try {
+    const resp = await fetch('/api/browse?path=' + encodeURIComponent(subPath), {
+      headers: { 'Authorization': 'Bearer ' + authToken }
+    });
+    const data = await resp.json();
+    currentFiles = data.files || [];
+    currentBrowsePath = data.currentPath;
+    const crumbs = data.currentPath.split('/').filter(Boolean);
+    let pathHtml = '<div class="file-path-bar"><span class="seg" onclick="browseFiles(\'/output\')">📁 /output</span>';
+    if (crumbs.length) pathHtml += '<span class="sep">/</span>';
+    let cumPath = '/output';
+    for (const crumb of crumbs) {
+      cumPath += '/' + crumb;
+      const isOutput = cumPath === '/output';
+      if (!isOutput) pathHtml += '<span class="sep">/</span><span class="seg" onclick="browseFiles(\'' + cumPath + '\')">' + crumb + '</span>';
+    }
+    pathHtml += '</div>';
+    if (!currentFiles.length) {
+      body.innerHTML = pathHtml + '<div class="file-nav" style="padding:12px;text-align:center;color:var(--text3)">(empty directory)</div>';
+    } else {
+      let html = pathHtml;
+      for (const f of currentFiles) {
+        const icon = f.isDir ? '📁' : getFileIcon(f.name);
+        const size = f.isFile ? fmtFileSize(f.size) : '';
+        const dlBtn = f.isFile ? `<a class="file-dl" href="/api/download?path=${encodeURIComponent((data.currentPath === '/' ? '' : data.currentPath) + '/' + f.name)}" download title="Download" target="_blank">⬇️</a>` : '';
+        const click = f.isDir ? `onclick="browseFiles('${(data.currentPath === '/' ? '' : data.currentPath)}/${f.name}')"` : '';
+        html += `<div class="file-item" ${click}><span class="file-icon">${icon}</span><span class="file-name">${escapeHtml(f.name)}</span><span class="file-size">${size}</span>${dlBtn}</div>`;
+      }
+      body.innerHTML = html;
+      $('file-count').textContent = currentFiles.filter(f=>f.isFile).length + ' files';
+    }
+  } catch (e) {
+    body.innerHTML = '<div class="file-nav" style="padding:12px;color:var(--red)">Error: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop().toLowerCase();
+  if (['png','jpg','jpeg','gif','svg','pdf','eps','tiff'].includes(ext)) return '🖼️';
+  if (['csv','tsv','xlsx','xls'].includes(ext)) return '📊';
+  if (['fasta','fa','fastq','fq','bam','sam','vcf','gff','gtf','bed'].includes(ext)) return '🧬';
+  if (['py','r','sh','pl','ipynb'].includes(ext)) return '💻';
+  if (['gz','zip','tar','bz2','xz'].includes(ext)) return '🗜️';
+  return '📄';
+}
+
+function fmtFileSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1048576).toFixed(1) + ' MB';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Actions
+// ═══════════════════════════════════════════════════════════════════
+function sendMessage() {
+  const text = input.value.trim();
+  if (!text || isProcessing || !ws || ws.readyState !== WebSocket.OPEN) return;
+  input.value = '';
+  input.style.height = 'auto';
+  ws.send(JSON.stringify({ type: 'message', content: text }));
+}
+
+function handleKey(e) {
+  const popup = $('skill-popup');
+  if (popup.classList.contains('show')) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); navigateSkillPopup(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); navigateSkillPopup(-1); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      if (skillPopupIndex >= 0) selectSkill(skillPopupIndex);
+      return;
+    }
+    if (e.key === 'Escape') { hideSkillPopup(); return; }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
+
+function clearHistory() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({ type: 'clear' }));
+  $('messages-inner').innerHTML = '';
+  setStatus('Ready', 'idle');
+  input.focus();
+}
+
+async function uploadFiles(event) {
+  const files = event.target.files;
+  if (!files.length) return;
+  const status = $('upload-status');
+  status.textContent = `Uploading ${files.length} file(s)...`;
+  for (const file of files) {
+    try {
+      const reader = new FileReader();
+      const content = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const resp = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${authToken}` },
+        body: JSON.stringify({ filename: file.name, content }),
+      });
+      const result = await resp.json();
+      if (result.success) {
+        status.textContent = `✅ ${file.name} (${fmtSize(result.size)}) uploaded`;
+        input.value = `I've uploaded ${file.name} to the server. Can you analyze it?`;
+        input.style.height = 'auto'; input.focus();
+      } else {
+        status.textContent = `❌ ${file.name}: ${result.error}`;
+      }
+    } catch(err) { status.textContent = `❌ ${file.name}: ${err.message}`; }
+  }
+  setTimeout(() => { status.textContent = ''; }, 5000);
+  event.target.value = '';
+}
+
+function copyCode(btn) {
+  const code = btn.parentElement.querySelector('code');
+  if (code) navigator.clipboard.writeText(code.textContent).then(() => { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); });
+}
+
+function escapeHtml(t) { const d = document.createElement('div'); d.textContent = t; return d.innerHTML; }
+function fmtSize(b) { if (b<1024) return b+' B'; if (b<1048576) return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+
+// ═══════════════════════════════════════════════════════════════════
+// Keyboard shortcuts
+// ═══════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isProcessing) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'cancel' }));
+  }
+});
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+});
+
+$('login-username').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('login-password').focus(); });
+$('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('reg-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('reg-confirm').focus(); });
+$('reg-confirm').addEventListener('keydown', (e) => { if (e.key === 'Enter') doRegister(); });
+
+// ═══════════════════════════════════════════════════════════════════
+// Auto-login
+// ═══════════════════════════════════════════════════════════════════
+if (authToken && username) {
+  fetch('/api/me', {
+    headers: { 'Authorization': `Bearer ${authToken}` }
+  }).then(resp => {
+    if (resp.ok) { enterApp(); }
+    else {
+      localStorage.removeItem('cc_token');
+      localStorage.removeItem('cc_user');
+      $('login-username').focus();
+    }
+  }).catch(() => { $('login-username').focus(); });
+} else {
+  $('login-username').focus();
+}
+
+</script>
+
+</body>
+</html>
