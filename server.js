@@ -28,6 +28,57 @@ const initSqlJs = require('sql.js');
 const PORT      = parseInt(process.env.PORT, 10) || 3457;
 const SECRET    = process.env.SECRET || 'test-env-secret';
 const CLAUDE_CMD = process.env.CLAUDE_CMD || 'claude';
+
+// ─── Skill → Progress mapping (for single-cell & general bioinfo pipelines) ──
+// 进度单调递增；多个 Skill 触发时取较大值，避免重复触发达不到下一步
+const SKILL_PROGRESS = [
+  // 数据输入
+  { match: /bio-single-cell-data-io|sa\.scanpy|sa\.anndata/, percent: 10, step: '加载数据 / 格式转换' },
+  // 预处理
+  { match: /bio-single-cell-preprocessing|sa\.bulk-rnaseq/,      percent: 20, step: 'QC + 过滤 / 归一化' },
+  // 去双胞
+  { match: /bio-single-cell-doublet-detection/,                  percent: 30, step: '去双胞检测' },
+  // 整合 / 降维
+  { match: /bio-single-cell-batch-integration|sa\.scvi-tools|cs\.scvi-tools/, percent: 45, step: '样本整合 / 批次校正' },
+  // 聚类
+  { match: /bio-single-cell-clustering/,                          percent: 55, step: '聚类 / UMAP 可视化' },
+  // Marker
+  { match: /bio-single-cell-markers-annotation/,                  percent: 65, step: 'Marker 基因识别' },
+  // 细胞类型注释
+  { match: /bio-single-cell-cell-annotation|scrna-cell-type-annotator/, percent: 75, step: '细胞类型注释' },
+  // 轨迹 / 拟时序
+  { match: /bio-single-cell-trajectory-injection|bio-single-cell-trajectory-inference/, percent: 85, step: '轨迹 / 拟时序分析' },
+  // 通讯
+  { match: /bio-single-cell-cell-communication|bio-single-cell-metabolite-communication/, percent: 95, step: '细胞通讯 / 代谢通讯' },
+  // 出图与完成
+  { match: /sa\.scientific-visualization|sa\.matplotlib|sa\.seaborn|sa\.scientific-slides/, percent: 98, step: '结果可视化' },
+  // 多组学 / scATAC
+  { match: /bio-single-cell-scatac-analysis|bio-single-cell-multimodal-integration/, percent: 70, step: '多组学分析' },
+  { match: /bio-single-cell-lineage-tracing|bio-single-cell-perturb-seq/, percent: 80, step: '谱系 / 扰动分析' },
+  // 差异表达 / 富集（bulk RNA-seq 主力）
+  { match: /sa\.pydeseq2|sa\.pathway-enrichment/,                 percent: 60, step: '差异表达 / 通路富集' },
+  // 文献调研
+  { match: /sa\.literature-review|sa\.paper-lookup|sa\.citation-management|research-lookup|database-lookup/, percent: 35, step: '文献检索 / 综述' },
+  // 写作
+  { match: /scientific-writing|scientific-brainstorming|hypothesis-generation|ns\.nature-writing|ns\.nature-polishing|ns\.nature-response/, percent: 90, step: '论文撰写 / 润色' },
+  // 基金
+  { match: /research-grants|ns\.nature-proposal-writer/,          percent: 90, step: '基金 / 标书撰写' },
+];
+
+function getProgressForTool(toolName, input) {
+  const name = toolName || '';
+  const text = (name + ' ' + JSON.stringify(input || {})).toLowerCase();
+  for (const m of SKILL_PROGRESS) {
+    if (m.match.test(text)) return { percent: m.percent, step: m.step };
+  }
+  return null;
+}
+
+// 进度条用的辅助符号
+function progressBar(p, w = 12) {
+  const filled = Math.round((p / 100) * w);
+  return '█'.repeat(filled) + '░'.repeat(w - filled);
+}
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DB_PATH   = path.join(__dirname, 'data', 'claude-webui-test.db');
 const TOKEN_TTL_DAYS = 30;
@@ -263,6 +314,148 @@ app.post('/api/upload', authMiddleware, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── VPN / Mihomo Control API ──────────────────────────────────────────────────
+const MIHOMO_API = 'http://127.0.0.1:9090';
+let activeVpnNode = null;
+let vpnEnabled = false; // 真正控制 Claude 是否走代理
+
+async function ensureMihomoRunning() {
+  try { require('child_process').execSync('systemctl is-active mihomo', { stdio: 'ignore' }); return true; }
+  catch (e) { return false; }
+}
+
+async function getMihomoGroups() {
+  try {
+    const r = await fetch(MIHOMO_API + '/proxies');
+    if (!r.ok) return [];
+    const d = await r.json();
+    return Object.entries(d.proxies || {})
+      .filter(([n, p]) => p.type === 'Selector' || p.type === 'url-test')
+      .map(([n]) => n);
+  } catch (e) { return []; }
+}
+
+async function getMihomoCurrent(group) {
+  try {
+    const r = await fetch(`${MIHOMO_API}/proxies/${encodeURIComponent(group)}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.now || null;
+  } catch (e) { return null; }
+}
+
+async function selectMihomoNode(group, name) {
+  const r = await fetch(`${MIHOMO_API}/proxies/${encodeURIComponent(group)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return r.ok;
+}
+
+app.get('/api/vpn/nodes', authMiddleware, async (req, res) => {
+  const groups = await getMihomoGroups();
+  const result = { active: null, nodes: [] };
+  if (!groups.length) return res.json(result);
+  result.active = await getMihomoCurrent(groups[0]) || activeVpnNode;
+  // List proxy servers
+  try {
+    const r = await fetch(MIHOMO_API + '/proxies');
+    const d = await r.json();
+    for (const [name, info] of Object.entries(d.proxies || {})) {
+      if (info.type === 'Selector' || info.type === 'url-test') {
+        const all = info.all || [];
+        for (const node of all) result.nodes.push({ name: node, group: name });
+      }
+    }
+    if (!result.active && result.nodes.length) result.active = result.nodes[0].name;
+  } catch (e) {}
+  res.json(result);
+});
+
+app.post('/api/vpn/node', authMiddleware, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const groups = await getMihomoGroups();
+  let success = false;
+  for (const g of groups) {
+    if (await selectMihomoNode(g, name)) { success = true; break; }
+  }
+  if (success) {
+    activeVpnNode = name;
+    return res.json({ success: true, node: name });
+  }
+  res.status(500).json({ error: 'Failed to switch node' });
+});
+
+app.post('/api/vpn/on', authMiddleware, (req, res) => {
+  vpnEnabled = true;
+  res.json({ success: true, enabled: true });
+});
+
+app.post('/api/vpn/off', authMiddleware, (req, res) => {
+  vpnEnabled = false;
+  activeVpnNode = null;
+  res.json({ success: true, enabled: false });
+});
+
+app.get('/api/vpn/status', authMiddleware, (req, res) => {
+  res.json({ enabled: vpnEnabled, active: activeVpnNode });
+});
+
+// ─── Create folder API ──────────────────────────────────────────────────────────
+app.post('/api/folder', authMiddleware, (req, res) => {
+  const { path: folderPath } = req.body || {};
+  if (!folderPath) return res.status(400).json({ error: 'path required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const target = path.resolve(path.join(userDir, folderPath));
+  if (!target.startsWith(userDir)) return res.status(403).json({ error: 'Access denied' });
+  try {
+    fs.mkdirSync(target, { recursive: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Move file/folder API ───────────────────────────────────────────────────────
+app.post('/api/move', authMiddleware, (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const src = path.resolve(path.join(userDir, from));
+  const dst = path.resolve(path.join(userDir, to));
+  if (!src.startsWith(userDir) || !dst.startsWith(userDir)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'Source not found' });
+  try {
+    // If dst is a directory, move inside it
+    let finalDst = dst;
+    if (fs.existsSync(dst) && fs.statSync(dst).isDirectory()) {
+      finalDst = path.join(dst, path.basename(src));
+    }
+    if (finalDst === src) return res.status(400).json({ error: 'Cannot move to itself' });
+    fs.renameSync(src, finalDst);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Delete file API ────────────────────────────────────────────────────────────
+app.delete('/api/file', authMiddleware, (req, res) => {
+  const filePath = req.query.path || '';
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const full = path.resolve(path.join(userDir, filePath));
+  if (!full.startsWith(userDir)) return res.status(403).json({ error: 'Access denied' });
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'Not found' });
+  try {
+    if (fs.statSync(full).isDirectory()) {
+      fs.rmSync(full, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(full);
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/files', authMiddleware, (req, res) => {
   try {
     const files = fs.readdirSync(UPLOAD_DIR).map(f => {
@@ -486,10 +679,20 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
       if (!fs.existsSync(userOutputDir)) fs.mkdirSync(userOutputDir, { recursive: true });
       if (!fs.existsSync(userUploadDir)) fs.mkdirSync(userUploadDir, { recursive: true });
 
+      // 仅在 VPN 开启时注入代理，让 R/Python 的 GO/KEGG 等外部请求走代理
+      const claudeEnv = { ...process.env };
+      if (vpnEnabled) {
+        Object.assign(claudeEnv, {
+          HTTP_PROXY: 'http://127.0.0.1:7890',
+          HTTPS_PROXY: 'http://127.0.0.1:7890',
+          http_proxy: 'http://127.0.0.1:7890',
+          https_proxy: 'http://127.0.0.1:7890',
+        });
+      }
       proc = spawn(CLAUDE_CMD, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: userOutputDir,
-        env: { ...process.env },
+        env: claudeEnv,
         timeout: 600000,
       });
       runningProcs.set(user.userId, proc);
@@ -501,6 +704,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     let buf = '';
     let beforeFiles;
     let assistantText = '';
+    let progress = { percent: 0, step: '初始化' };  // 进度状态（单调递增）
     try { beforeFiles = new Set(fs.readdirSync('/root').filter(f => !f.startsWith('.'))); } catch(e) {}
 
     proc.stdout.on('data', (chunk) => {
@@ -518,7 +722,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
               if (c.type === 'text') assistantText += c.text || '';
             }
           }
-          handleStreamEvent(ev, s, user);
+          handleStreamEvent(ev, s, user, progress);
         } catch { /* skip non-JSON lines */ }
       }
     });
@@ -529,6 +733,10 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     });
 
     proc.on('close', (code) => {
+  // 进程结束：进度强制设为 100%
+  progress.percent = 100;
+  progress.step = '完成';
+  s({ type: 'progress', percent: 100, step: '完成', bar: progressBar(100) });
   s({ type: 'status', content: `Done (exit: ${code})` });
       runningProcs.delete(user.userId);
       // Save assistant response to database
@@ -572,7 +780,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
   });
 }
 
-function handleStreamEvent(ev, send, user) {
+function handleStreamEvent(ev, send, user, progress) {
   switch (ev.type) {
     case 'system':
       if (ev.subtype === 'init') {
@@ -593,9 +801,17 @@ function handleStreamEvent(ev, send, user) {
           case 'text':
             send({ type: 'text', content: c.text || '' });
             break;
-          case 'tool_use':
+          case 'tool_use': {
             send({ type: 'tool_use', name: c.name || 'unknown', input: c.input || {} });
+            // ─── 进度条：根据工具名映射到分析步骤 ───
+            const p = getProgressForTool(c.name, c.input);
+            if (p && progress && p.percent > progress.percent) {
+              progress.percent = p.percent;
+              progress.step = p.step;
+              send({ type: 'progress', percent: p.percent, step: p.step, bar: progressBar(p.percent) });
+            }
             break;
+          }
         }
       }
       break;
@@ -606,6 +822,16 @@ function handleStreamEvent(ev, send, user) {
       if (ev.session_id && user.userId) {
         user.sessionId = ev.session_id;
         updateUserSessionId(user.userId, ev.session_id);
+      }
+      // ─── result 事件：进度收尾（不必到 100%，留给 close 处理）───
+      if (progress && progress.percent < 100) {
+        // 如果到 result 还没满，说明不是典型 pipeline；推到 99 留给 close
+        const final = progress.percent < 99 ? 99 : progress.percent;
+        if (final !== progress.percent) {
+          progress.percent = final;
+          progress.step = '收尾中';
+          send({ type: 'progress', percent: final, step: '收尾中', bar: progressBar(final) });
+        }
       }
       send({
         type: 'turn_complete',

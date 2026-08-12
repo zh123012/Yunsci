@@ -28,7 +28,26 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .nav-tab{background:none;border:none;padding:6px 12px;font-size:13px;color:var(--text2);cursor:pointer;border-radius:6px;font-weight:500}
 .nav-tab:hover{background:var(--bg2);color:var(--text)}
 .nav-tab.act{background:#ddf4ff;color:var(--accent)}
+.nav-vpn{background:none;border:1px solid var(--border);padding:0;font-size:12px;color:var(--text2);cursor:pointer;border-radius:6px;font-weight:500;display:flex;align-items:center;overflow:hidden}
+.nav-vpn .vpn-switch{padding:5px 6px 5px 10px;display:flex;align-items:center;gap:4px}
+.nav-vpn .vpn-arrow{padding:5px 8px;border-left:1px solid var(--border);font-size:9px;color:var(--text3)}
+.nav-vpn .vpn-arrow:hover{background:var(--bg3);color:var(--text)}
+.nav-vpn .vpn-switch:hover{background:var(--bg2)}
+.nav-vpn.on .vpn-switch{color:var(--accent)}
+.nav-vpn.on{border-color:var(--accent)}
+.vpn-menu{position:fixed;background:var(--bg);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow-lg);padding:6px;z-index:200;min-width:200px;max-height:300px;overflow-y:auto;display:none}
+.vpn-menu.s{display:block}
+.vpn-item{padding:6px 10px;font-size:12px;cursor:pointer;border-radius:4px;display:flex;align-items:center;justify-content:space-between}
+.vpn-item:hover{background:var(--bg3)}
+.vpn-item .nm{flex:1}
+.vpn-item .ck{color:var(--green);font-size:14px;visibility:hidden}
+.vpn-item.act .ck{visibility:visible}
 .nav-r{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)}
+#prog-wrap{font-size:11px;color:var(--text)}
+#prog-bar{width:120px;height:8px;background:var(--bg2);border-radius:4px;overflow:hidden;border:1px solid var(--border)}
+#prog-fill{height:100%;width:0%;background:linear-gradient(90deg,#10b981,#3b82f6);transition:width .4s ease;border-radius:4px}
+#prog-pct{font-weight:600;color:var(--accent);min-width:32px;font-family:var(--mono)}
+#prog-step{color:var(--text2)}
 .nav-r button{background:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;cursor:pointer;font-size:12px;color:var(--text2)}
 .nav-r button:hover{background:var(--bg2)}
 .main{display:flex;flex:1;overflow:hidden}
@@ -90,6 +109,8 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .sidebar-tab{flex:1;padding:7px 6px;font-size:12px;background:none;border:none;border-bottom:2px solid transparent;cursor:pointer;color:var(--text2);font-weight:500;text-align:center}
 .sidebar-tab:hover{color:var(--text)}
 .sidebar-tab.act{border-bottom-color:var(--accent);color:var(--accent)}
+.sidebar-add{width:36px;border:none;background:none;cursor:pointer;font-size:13px;color:var(--text2);flex-shrink:0}
+.sidebar-add:hover{color:var(--accent)}
 .sidebar-body{flex:1;overflow-y:auto;padding:8px;min-height:0}
 .sidebar-panel{display:none;height:100%;flex-direction:column}
 .sidebar-panel.act{display:flex}
@@ -107,10 +128,11 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .fb-item .fi{width:18px;text-align:center;font-size:13px}
 .fb-item .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .fb-item .fs{color:var(--text3);font-size:11px;white-space:nowrap}
-.fb-item .fd,.fb-item .fr{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
-.fb-item:hover .fd,.fb-item:hover .fr{visibility:visible}
+.fb-item .fd,.fb-item .fr,.fb-item .fdel{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
+.fb-item:hover .fd,.fb-item:hover .fr,.fb-item:hover .fdel{visibility:visible}
 .fb-item .fd{color:var(--accent)}
 .fb-item .fr{color:var(--green)}
+.fb-item .fdel{color:var(--red)}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s}
 .toast.s{opacity:1}
 </style></head>
@@ -127,21 +149,26 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 <div id="app">
 <div class="nav"><div class="nav-brand">Yunsci <span style="font-size:10px;font-weight:400;color:var(--text3)">v5</span></div>
 <button class="nav-tab act" onclick="swView('chat')">💬 Chat</button>
+<div class="nav-vpn" id="vpn-btn">
+  <span class="vpn-switch" onclick="toggleVpnSwitch()" title="开/关 VPN">🛡️ <span id="vpn-state">Off</span></span>
+  <span class="vpn-arrow" onclick="togVpn()" title="切换节点">▼</span>
+</div>
 <button class="nav-tab" onclick="swView('explore')">🔍 Explore</button>
-<div class="nav-r"><span id="st">Ready</span><span id="cost" style="font-size:11px"></span>
+<div class="nav-r"><span id="st">Ready</span><div id="prog-wrap" style="display:none;align-items:center;gap:8px;margin-left:12px"><div id="prog-bar"><div id="prog-fill"></div></div><span id="prog-pct">0%</span><span id="prog-step" style="font-size:11px;color:var(--text2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div><span id="cost" style="font-size:11px"></span>
 <button onclick="document.getElementById('fu').click()">📤</button><input type="file" id="fu" multiple style="display:none" onchange="up(event)">
 <button onclick="logout()">🚪</button></div></div>
 <div class="main">
 <div class="chat"><div id="cb" class="conv-bar"></div>
 <div id="ms-area" style="flex:1;position:relative;display:flex;flex-direction:column;min-height:0"></div>
 <div class="inp-area"><div class="inp-rw"><div class="inp-wrap"><textarea id="inp" rows="1" placeholder='Ask Yunsci... Type "/" for skills'></textarea><div class="skill-popup" id="sp"></div></div>
-<button id="sbtn" onclick="send()">➤</button></div><div class="inp-hint"><span id="hint-text">Enter send · Shift+Enter newline</span><span id="us"></span></div></div></div>
-<div class="sidebar" id="sb"><div class="sidebar-tabs"><button class="sidebar-tab" data-sidebar="uploads">📤 Uploads</button><button class="sidebar-tab act" data-sidebar="output">📊 Output</button></div>
+<button id="sbtn" onclick="if(this.textContent==='⬜'){cancelRun()}else{send()}">➤</button></div><div class="inp-hint"><span id="hint-text">Enter send · Shift+Enter newline</span><span id="us"></span></div></div></div>
+<div class="sidebar" id="sb"><div class="sidebar-tabs"><button class="sidebar-tab" data-sidebar="uploads">📤 Uploads</button><button class="sidebar-tab act" data-sidebar="output">📊 Output</button><button class="sidebar-add" onclick="newFolder()" title="新建文件夹">📁+</button></div>
 <div class="sidebar-body"><div class="sidebar-panel" id="sp-uploads"></div><div class="sidebar-panel act" id="sp-output" style="display:flex"></div></div></div>
 <div class="sidebar-tog" id="sbt">◀</div></div></div>
 <div class="toast" id="toast"></div>
+<div class="vpn-menu" id="vpn-menu"></div>
 <script>
-var ws=null,tok=localStorage.getItem('t'),user=localStorage.getItem('u'),busy=0,actC=null,cList=[];
+var ws=null,tok=localStorage.getItem('t'),user=localStorage.getItem('u'),busy=0,actC=null,cList=[],pendingMsg=[];
 var skl=[],spi=-1,sf='';
 
 if(tok&&user){fetch('/api/me',{headers:{Authorization:'Bearer '+tok}}).then(function(r){if(r.ok)enter();else{localStorage.clear();tok=null;user=null}})}
@@ -212,19 +239,31 @@ ws.onopen=function(){ws.send(JSON.stringify({type:'auth',token:tok}))};
 ws.onmessage=function(ev){try{var m=JSON.parse(ev.data);var ci=m.conversation_id||actC;
 if(m.type==='auth_ok'){document.getElementById('st').textContent='Ready';return}
 if(m.type==='auth_error'){logout();return}
-if(m.type==='user_message'){addMsg(m.content,'u',ci);saveMsg(ci||actC,'user',m.content);busy=1;document.getElementById('st').textContent='Thinking...';document.getElementById('sbtn').textContent='⬜';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=1;
+if(m.type==='user_message'){addMsg(m.content,'u',ci);saveMsg(ci||actC,'user',m.content);busy=1;document.getElementById('st').textContent='Thinking...';document.getElementById('sbtn').textContent='⬜';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=0;document.getElementById('hint-text').textContent='Thinking... 输入消息回车可插话排队';
+ // 重置进度条
+ var pw=document.getElementById('prog-wrap');var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');if(pw){pw.style.display='flex';pf.style.width='0%';pp.textContent='0%';ps.textContent='初始化...'}
  var el=actMsEl(ci);var d=document.createElement('div');d.className='msg';d.innerHTML='<div class="msg-h"><span class="av a">Y</span>小云</div><div class="msg-b a"></div>';el.appendChild(d);
  sSt(ci,{b:d.querySelector('.msg-b'),buf:'',t:null});return}
 if(m.type==='thinking'){var s=gSt(ci);if(!s||!s.b||!m.content)return;if(!s.t){s.t=document.createElement('div');s.t.className='think';s.t.innerHTML='<div class="think-h" onclick="togT(this)"><span class="ar">▶</span> Thinking</div><div class="think-b"></div>';s.b.parentNode.insertBefore(s.t,s.b)}var tb=s.t.querySelector('.think-b');if(tb&&tb.textContent.length<3000)tb.textContent+=m.content;return}
 if(m.type==='thinking_progress'){var th=gSt(ci).t?gSt(ci).t.querySelector('.think-h'):null;document.getElementById('st').textContent='Thinking ('+m.tokens+')';if(th)th.innerHTML='<span class="ar">▶</span> Thinking ('+m.tokens+' tokens)';return}
 if(m.type==='text'){var s=gSt(ci);if(!s||!s.b)return;s.buf+=m.content||'';s.b.textContent=s.buf;sc(ci);return}
 if(m.type==='tool_use'){document.getElementById('st').textContent=m.name;var s=gSt(ci);if(s&&s.b){var tc=document.createElement('div');tc.className='tool-call';tc.textContent='$ '+m.name;s.b.parentNode.insertBefore(tc,s.b)};return}
-if(m.type==='turn_complete'){busy=0;document.getElementById('st').textContent='Ready';document.getElementById('sbtn').textContent='➤';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=0;document.getElementById('inp').focus();var s=gSt(ci);if(s&&s.b&&s.buf.trim()){s.b.innerHTML=smd(s.buf);saveMsg(ci||actC,'assistant',s.buf);if(m.cost_usd){var cf=document.createElement('div');cf.style.cssText='font-size:11px;color:var(--text2);margin-top:4px';cf.textContent='$'+m.cost_usd.toFixed(4)+(m.duration_ms?' '+(m.duration_ms/1000).toFixed(1)+'s':'');s.b.appendChild(cf)}}if(m.cost_usd)document.getElementById('cost').textContent='$'+m.cost_usd.toFixed(4);clrSt(ci);sc(ci);return}
+if(m.type==='progress'){var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');if(pf){pf.style.width=m.percent+'%';pp.textContent=m.percent+'%';ps.textContent=m.step||''}return}
+if(m.type==='turn_complete'){var s=gSt(ci);if(s&&s.b&&s.buf.trim()){s.b.innerHTML=smd(s.buf);saveMsg(ci||actC,'assistant',s.buf);if(m.cost_usd){var cf=document.createElement('div');cf.style.cssText='font-size:11px;color:var(--text2);margin-top:4px';cf.textContent='$'+m.cost_usd.toFixed(4)+(m.duration_ms?' '+(m.duration_ms/1000).toFixed(1)+'s':'');s.b.appendChild(cf)}}if(m.cost_usd)document.getElementById('cost').textContent='$'+m.cost_usd.toFixed(4);clrSt(ci);sc(ci);
+ // 进度条 100% 短暂保持后淡出
+ var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');var pw=document.getElementById('prog-wrap');if(pf){pf.style.width='100%';pp.textContent='100%';ps.textContent='完成';setTimeout(function(){if(pw)pw.style.display='none';pf.style.width='0%'},3500)}
+  if(pendingMsg.length){var next=pendingMsg.shift();document.getElementById('hint-text').textContent='已插话: '+next+(pendingMsg.length?' · 还有'+pendingMsg.length+'条排队':'');if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'message',content:next,conversation_id:ci}))}}else{document.getElementById('hint-text').textContent='Enter send · Shift+Enter newline';busy=0;document.getElementById('st').textContent='Ready';document.getElementById('sbtn').textContent='➤';document.getElementById('inp').disabled=0;document.getElementById('inp').focus()}
+  return}
 if(m.type==='error'){alert(m.content);busy=0;document.getElementById('st').textContent='Error';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=0;clrSt(ci)}
 }catch(e){console.error(e)}};ws.onclose=function(){if(tok){toast('Reconnecting...');setTimeout(conn,2000)}};ws.onerror=function(){}}
 
 function addMsg(t,r,ci){var el=actMsEl(ci||actC);var d=document.createElement('div');d.className='msg';if(r==='u')d.innerHTML='<div class="msg-h" style="justify-content:flex-end">You<span class="av u">U</span></div><div class="msg-b u">'+esc(t)+'</div>';else d.innerHTML='<div class="msg-h"><span class="av a">Y</span>小云</div><div class="msg-b a">'+esc(t)+'</div>';el.appendChild(d);sc(ci||actC)}
-function send(){var btn=document.getElementById('sbtn');if(busy){btn.textContent='➤';btn.disabled=0;busy=0;document.getElementById('inp').disabled=0;document.getElementById('st').textContent='Stopped';if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'cancel'}));return}var t=document.getElementById('inp').value.trim();if(!t||!ws||ws.readyState!==WebSocket.OPEN)return;document.getElementById('inp').value='';hideS();ws.send(JSON.stringify({type:'message',content:t,conversation_id:actC}))}
+function send(){var t=document.getElementById('inp').value.trim();if(!t)return;
+  // If busy, queue the message as interjection (like /btw)
+  if(busy){pendingMsg.push(t);document.getElementById('inp').value='';document.getElementById('hint-text').textContent='已插话排队: '+t+(pendingMsg.length>1?' · 共'+pendingMsg.length+'条':'')+' · 回合一结束自动发送';return}
+  if(!ws||ws.readyState!==WebSocket.OPEN)return;
+  document.getElementById('inp').value='';hideS();ws.send(JSON.stringify({type:'message',content:t,conversation_id:actC}))}
+function cancelRun(){var btn=document.getElementById('sbtn');btn.textContent='➤';btn.disabled=0;busy=0;pendingMsg=[];document.getElementById('inp').disabled=0;document.getElementById('st').textContent='Stopped';document.getElementById('hint-text').textContent='Enter send · Shift+Enter newline';if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({type:'cancel'}))}
 function sc(ci){var el=document.getElementById('m-'+ci);if(el)requestAnimationFrame(function(){el.scrollTop=el.scrollHeight})}
 function esc(t){var d=document.createElement('div');d.textContent=t;return d.innerHTML}
 function togT(el){el.querySelector('.ar').classList.toggle('o');el.parentElement.querySelector('.think-b').classList.toggle('s')}
@@ -257,10 +296,97 @@ document.getElementById('sbt').addEventListener('click',function(){var sb=docume
 // ═══ Plots ════════════════════════════════════════════════
 
 // ═══ File Browser ═════════════════════════════════════════
-function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':'';var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var cl=f.isDir?' class="fb-item" data-side="'+side+'" data-p="'+fp+'"':' class="fb-item"';h+='<div'+cl+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+ref+' '+dl+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
-document.addEventListener('click',function(e){var seg=e.target.closest('.seg');if(seg)loadSidebar(seg.dataset.side,seg.dataset.p);var di=e.target.closest('.fb-item[data-p]');if(di)loadSidebar(di.dataset.side,di.dataset.p);var dl=e.target.closest('.fd');if(dl&&dl.dataset.d)dl2(dl.dataset.d);var ref=e.target.closest('.fr');if(ref&&ref.dataset.ref){document.getElementById('inp').value='分析一下 '+ref.dataset.ref.split('/').pop()+' 文件';document.getElementById('inp').focus();swView('chat')}});
+function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':'';var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
+function newFolder(){var name=prompt('输入文件夹名称:');if(!name||!name.trim())return;var side=document.querySelector('.sidebar-tab.act').dataset.sidebar;var path=side+'/'+name.trim();fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:path})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已创建文件夹');loadSidebar(side,side)}else toast(d.error||'创建失败')})}
+
+// Drag & drop file to folder
+var dragFrom=null;
+document.addEventListener('dragstart',function(e){
+  var item=e.target.closest('.fb-item');
+  if(item&&item.dataset.path){dragFrom=item.dataset.path;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragFrom)}
+});
+document.addEventListener('dragover',function(e){
+  var dir=e.target.closest('.is-dir');
+  if(dir){e.preventDefault();e.dataTransfer.dropEffect='move';dir.style.outline='2px dashed var(--accent)'}
+});
+document.addEventListener('dragleave',function(e){
+  var dir=e.target.closest('.is-dir');
+  if(dir)dir.style.outline=''
+});
+document.addEventListener('drop',function(e){
+  var dir=e.target.closest('.is-dir');
+  if(dir){e.preventDefault();dir.style.outline='';var from=dragFrom||e.dataTransfer.getData('text/plain');if(!from)return;var to=dir.dataset.path;if(from===to)return;fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:from,to:to})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已移动');var sde=from.split('/')[0];loadSidebar(sde,sde)}else toast(d.error||'移动失败')});dragFrom=null}
+});
+document.addEventListener('click',function(e){
+  var del=e.target.closest('.fdel');
+  if(del&&del.dataset.del){e.preventDefault();e.stopPropagation();
+    if(confirm('确定删除 '+del.dataset.del.split('/').pop()+' 吗？')){
+      fetch('/api/file?path='+encodeURIComponent(del.dataset.del),{method:'DELETE',headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d2){
+        if(d2.success){toast('已删除');var sde=del.dataset.del.split('/')[0];loadSidebar(sde,sde);loadSidebar(sde==='uploads'?'output':'uploads',sde==='uploads'?'output':'uploads')}
+        else toast('删除失败')
+      })
+    }
+    return
+  }
+  var seg=e.target.closest('.seg');if(seg){loadSidebar(seg.dataset.side,seg.dataset.p);return}
+  var di=e.target.closest('.fb-item[data-p]');if(di){loadSidebar(di.dataset.side,di.dataset.p);return}
+  var dl=e.target.closest('.fd');if(dl&&dl.dataset.d){dl2(dl.dataset.d);return}
+  var ref=e.target.closest('.fr');if(ref&&ref.dataset.ref){document.getElementById('inp').value='分析一下 '+ref.dataset.ref.split('/').pop()+' 文件';document.getElementById('inp').focus();swView('chat')}
+});
 function dl2(p){if(!p)return;fetch('/api/download?path='+encodeURIComponent(p),{headers:{Authorization:'Bearer '+tok}}).then(function(r){if(!r.ok){toast('Failed');return}r.blob().then(function(b){var a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=p.split('/').pop()||'dl';a.click()})}).catch(function(){toast('Failed')})}
 function fsz(b){if(!b||b<1)return'';if(b<1024)return b+'B';return(b/1024).toFixed(1)+'KB'}
+
+// ═══ VPN Controls ═══════════════════════════════════════
+var vpnOn=false,vpnNode=null,vpnProxy='127.0.0.1:7890';
+async function loadVpnNodes(){try{var r=await fetch('/api/vpn/nodes',{headers:{Authorization:'Bearer '+tok}});var d=await r.json();if(d.error)return;vpnNodes=d.nodes||[];vpnNode=d.active;renderVpnMenu()}catch(e){console.error('VPN load error',e)}}
+function renderVpnMenu(){var menu=document.getElementById('vpn-menu');if(!vpnNodes||!vpnNodes.length){menu.innerHTML='<div class="vpn-item" style="color:var(--text3)">加载失败</div>';return}var h='';vpnNodes.forEach(function(n){h+='<div class="vpn-item'+(n.name===vpnNode?' act':'')+'" onclick="selVpnNode(\''+n.name+'\')"><span class="nm">'+n.name+'</span><span class="ck">✓</span></div>'});menu.innerHTML=h}
+function togVpn(){
+  var menu=document.getElementById('vpn-menu');
+  // 首次加载节点
+  if(!vpnNodes||!vpnNodes.length){loadVpnNodes()}
+  var btn=document.getElementById('vpn-btn');
+  var rect=btn.getBoundingClientRect();
+  menu.style.top=(rect.bottom+4)+'px';
+  menu.style.left=rect.left+'px';
+  menu.classList.toggle('s');
+}
+async function openVpn(){
+  if(!vpnNodes||!vpnNodes.length){await loadVpnNodes();if(!vpnNodes||!vpnNodes.length)return}
+  vpnOn=true;
+  var btn=document.getElementById('vpn-btn');
+  btn.classList.add('on');
+  document.getElementById('vpn-state').textContent='On';
+  // 通知后端开启代理
+  await fetch('/api/vpn/on',{method:'POST',headers:{Authorization:'Bearer '+tok}});
+  if(vpnNode){await selVpnNode(vpnNode)}
+  toast('VPN 已开启，后续任务将走代理');
+}
+async function closeVpn(){
+  vpnOn=false;
+  var btn=document.getElementById('vpn-btn');
+  btn.classList.remove('on');
+  document.getElementById('vpn-state').textContent='Off';
+  await fetch('/api/vpn/off',{method:'POST',headers:{Authorization:'Bearer '+tok}});
+  document.getElementById('vpn-menu').classList.remove('s');
+  toast('VPN 已关闭');
+}
+function toggleVpnSwitch(){
+  if(vpnOn){closeVpn()}else{openVpn()}
+}
+async function selVpnNode(name){
+  vpnNode=name;
+  var r=await fetch('/api/vpn/node',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({name:name})});
+  var d=await r.json();
+  if(d.success){renderVpnMenu();toast('节点: '+name)}else{toast('切换失败')}
+}
+document.addEventListener('click',function(e){
+  var menu=document.getElementById('vpn-menu');
+  if(!menu.classList.contains('s'))return;
+  if(e.target.closest('.vpn-menu')||e.target.closest('.nav-vpn'))return;
+  menu.classList.remove('s');
+});
+var vpnNodes=[];
+loadVpnNodes();
 
 // ═══ Markdown ══════════════════════════════════════════════
 function smd(t){if(!t)return'';var h=esc(t);
