@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<!-- v=2026-08-12-13:30 进度条已上线 -->
 <title>Yunsci v5</title>
 <style>
 :root{--bg:#fff;--bg2:#f8f9fa;--bg3:#e9ecef;--bg4:#dee2e6;--border:#d0d7de;--text:#1f2328;--text2:#656d76;--text3:#8b949e;--accent:#0969da;--accent2:#0550ae;--green:#1a7f37;--shadow:0 1px 3px rgba(0,0,0,.08);--shadow-lg:0 4px 12px rgba(0,0,0,.1);--radius:8px;--radius-sm:6px;--font:-apple-system,sans-serif;--mono:monospace;--sidebar-w:340px}
@@ -154,7 +158,7 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
   <span class="vpn-arrow" onclick="togVpn()" title="切换节点">▼</span>
 </div>
 <button class="nav-tab" onclick="swView('explore')">🔍 Explore</button>
-<div class="nav-r"><span id="st">Ready</span><div id="prog-wrap" style="display:none;align-items:center;gap:8px;margin-left:12px"><div id="prog-bar"><div id="prog-fill"></div></div><span id="prog-pct">0%</span><span id="prog-step" style="font-size:11px;color:var(--text2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span></div><span id="cost" style="font-size:11px"></span>
+<div class="nav-r"><span id="st">Ready</span><div id="prog-wrap" style="display:flex;align-items:center;gap:8px;margin-left:12px"><div id="prog-bar"><div id="prog-fill"></div></div><span id="prog-pct">0%</span><span id="prog-step" style="font-size:11px;color:var(--text2);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">待机</span></div><span id="cost" style="font-size:11px"></span>
 <button onclick="document.getElementById('fu').click()">📤</button><input type="file" id="fu" multiple style="display:none" onchange="up(event)">
 <button onclick="logout()">🚪</button></div></div>
 <div class="main">

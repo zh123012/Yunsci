@@ -71,7 +71,22 @@ function getProgressForTool(toolName, input) {
   for (const m of SKILL_PROGRESS) {
     if (m.match.test(text)) return { percent: m.percent, step: m.step };
   }
+  // Bash 工具运行 R/Python 脚本 → 推到 50%（脚本开始执行）
+  if (/^bash$|^command$/.test(name) && /python3? |rscript |seurat|monocle|clusterp|deseq2|scanpy/.test(text)) {
+    return { percent: 50, step: '运行分析脚本' };
+  }
   return null;
+}
+
+// 从 R/Python 子进程输出解析 [N/M] 格式进度
+function parseSubProgress(text) {
+  const m = text.match(/\[(\d+)\s*\/\s*(\d+)\]/);
+  if (!m) return null;
+  const cur = parseInt(m[1]), total = parseInt(m[2]);
+  if (total <= 0 || cur <= 0) return null;
+  // 映射到 50-95% 区间（脚本执行阶段）
+  const pct = 50 + Math.min(45, Math.round((cur / total) * 45));
+  return { percent: pct, step: `执行分析 ${cur}/${total}` };
 }
 
 // 进度条用的辅助符号
@@ -719,7 +734,16 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
           // Track assistant text for persistence
           if (ev.type === 'assistant' && ev.message && ev.message.content) {
             for (const c of ev.message.content) {
-              if (c.type === 'text') assistantText += c.text || '';
+              if (c.type === 'text') {
+                assistantText += c.text || '';
+                // 解析 Claude 转述的 Python/R 脚本 [N/M] 进度
+                const sp = parseSubProgress(c.text || '');
+                if (sp && sp.percent > progress.percent) {
+                  progress.percent = sp.percent;
+                  progress.step = sp.step;
+                  s({ type: 'progress', percent: sp.percent, step: sp.step, bar: progressBar(sp.percent) });
+                }
+              }
             }
           }
           handleStreamEvent(ev, s, user, progress);
@@ -729,7 +753,16 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
 
     proc.stderr.on('data', (chunk) => {
       const t = chunk.toString().trim();
-      if (t && !t.includes('Ignoring')) s({ type: 'status', content: t });
+      if (t && !t.includes('Ignoring')) {
+        s({ type: 'status', content: t });
+        // 解析 R/Python 子进程 [N/M] 格式进度
+        const sp = parseSubProgress(t);
+        if (sp && sp.percent > progress.percent) {
+          progress.percent = sp.percent;
+          progress.step = sp.step;
+          s({ type: 'progress', percent: sp.percent, step: sp.step, bar: progressBar(sp.percent) });
+        }
+      }
     });
 
     proc.on('close', (code) => {
@@ -857,10 +890,13 @@ wss.on('connection', (ws) => {
 
   const send = (data) => {
     if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify(data));
-    } else {
-      console.error('[WS] Cannot send (state:', ws.readyState, 'type:', data.type, ')');
+      try {
+        ws.send(JSON.stringify(data));
+      } catch (e) {
+        console.error('[WS] send error:', e.message, 'type:', data.type);
+      }
     }
+    // 静默忽略 CLOSED 状态（不再污染日志）
   };
 
   ws.on('message', async (raw) => {
