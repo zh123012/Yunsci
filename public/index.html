@@ -132,11 +132,12 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .fb-item .fi{width:18px;text-align:center;font-size:13px}
 .fb-item .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .fb-item .fs{color:var(--text3);font-size:11px;white-space:nowrap}
-.fb-item .fd,.fb-item .fr,.fb-item .fdel{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
-.fb-item:hover .fd,.fb-item:hover .fr,.fb-item:hover .fdel{visibility:visible}
+.fb-item .fd,.fb-item .fr,.fb-item .fdel,.fb-item .frn{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
+.fb-item:hover .fd,.fb-item:hover .fr,.fb-item:hover .fdel,.fb-item:hover .frn{visibility:visible}
 .fb-item .fd{color:var(--accent)}
 .fb-item .fr{color:var(--green)}
 .fb-item .fdel{color:var(--red)}
+.fb-item .frn{color:var(--accent)}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s}
 .toast.s{opacity:1}
 </style></head>
@@ -254,8 +255,13 @@ if(m.type==='text'){var s=gSt(ci);if(!s||!s.b)return;s.buf+=m.content||'';s.b.te
 if(m.type==='tool_use'){document.getElementById('st').textContent=m.name;var s=gSt(ci);if(s&&s.b){var tc=document.createElement('div');tc.className='tool-call';tc.textContent='$ '+m.name;s.b.parentNode.insertBefore(tc,s.b)};return}
 if(m.type==='progress'){var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');if(pf){pf.style.width=m.percent+'%';pp.textContent=m.percent+'%';ps.textContent=m.step||''}return}
 if(m.type==='turn_complete'){var s=gSt(ci);if(s&&s.b&&s.buf.trim()){s.b.innerHTML=smd(s.buf);saveMsg(ci||actC,'assistant',s.buf);if(m.cost_usd){var cf=document.createElement('div');cf.style.cssText='font-size:11px;color:var(--text2);margin-top:4px';cf.textContent='$'+m.cost_usd.toFixed(4)+(m.duration_ms?' '+(m.duration_ms/1000).toFixed(1)+'s':'');s.b.appendChild(cf)}}if(m.cost_usd)document.getElementById('cost').textContent='$'+m.cost_usd.toFixed(4);clrSt(ci);sc(ci);
- // 进度条 100% 短暂保持后淡出
- var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');var pw=document.getElementById('prog-wrap');if(pf){pf.style.width='100%';pp.textContent='100%';ps.textContent='完成';setTimeout(function(){if(pw)pw.style.display='none';pf.style.width='0%'},3500)}
+ // 进度条收尾：若还 < 100% 则推到 100%（后端 close 事件会再推一次），5s 后淡出
+ var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');var pw=document.getElementById('prog-wrap');
+ var curPct=parseInt((pp.textContent||'0').replace('%',''))||0;
+ if(pf){
+   if(curPct<100){pf.style.width='100%';pp.textContent='100%';ps.textContent='完成';}
+   setTimeout(function(){if(pw)pw.style.display='none';pf.style.width='0%';pp.textContent='0%';ps.textContent='待机'},5000)
+ }
   if(pendingMsg.length){var next=pendingMsg.shift();document.getElementById('hint-text').textContent='已插话: '+next+(pendingMsg.length?' · 还有'+pendingMsg.length+'条排队':'');if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'message',content:next,conversation_id:ci}))}}else{document.getElementById('hint-text').textContent='Enter send · Shift+Enter newline';busy=0;document.getElementById('st').textContent='Ready';document.getElementById('sbtn').textContent='➤';document.getElementById('inp').disabled=0;document.getElementById('inp').focus()}
   return}
 if(m.type==='error'){alert(m.content);busy=0;document.getElementById('st').textContent='Error';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=0;clrSt(ci)}
@@ -300,7 +306,7 @@ document.getElementById('sbt').addEventListener('click',function(){var sb=docume
 // ═══ Plots ════════════════════════════════════════════════
 
 // ═══ File Browser ═════════════════════════════════════════
-function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':'';var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
+function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':'';var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
 function newFolder(){var name=prompt('输入文件夹名称:');if(!name||!name.trim())return;var side=document.querySelector('.sidebar-tab.act').dataset.sidebar;var path=side+'/'+name.trim();fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:path})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已创建文件夹');loadSidebar(side,side)}else toast(d.error||'创建失败')})}
 
 // Drag & drop file to folder
@@ -328,6 +334,19 @@ document.addEventListener('click',function(e){
       fetch('/api/file?path='+encodeURIComponent(del.dataset.del),{method:'DELETE',headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d2){
         if(d2.success){toast('已删除');var sde=del.dataset.del.split('/')[0];loadSidebar(sde,sde);loadSidebar(sde==='uploads'?'output':'uploads',sde==='uploads'?'output':'uploads')}
         else toast('删除失败')
+      })
+    }
+    return
+  }
+  var rn=e.target.closest('.frn');
+  if(rn&&rn.dataset.rn){e.preventDefault();e.stopPropagation();
+    var oldPath=rn.dataset.rn;var oldName=oldPath.split('/').pop();var parentP=oldPath.split('/').slice(0,-1).join('/');
+    var newName=prompt('重命名「'+oldName+'」为:',oldName);
+    if(newName&&newName.trim()&&newName.trim()!==oldName){
+      var newPath=(parentP?parentP+'/':'')+newName.trim();
+      fetch('/api/rename',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:oldPath,to:newPath})}).then(function(r){return r.json()}).then(function(d){
+        if(d.success){toast('已重命名');var sde=oldPath.split('/')[0];loadSidebar(sde,sde)}
+        else toast(d.error||'重命名失败')
       })
     }
     return

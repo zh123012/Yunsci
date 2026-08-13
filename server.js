@@ -65,17 +65,41 @@ const SKILL_PROGRESS = [
   { match: /research-grants|ns\.nature-proposal-writer/,          percent: 90, step: '基金 / 标书撰写' },
 ];
 
-function getProgressForTool(toolName, input) {
-  const name = toolName || '';
+function getProgressForTool(toolName, input, progress) {
+  const name = (toolName || '').toLowerCase();
   const text = (name + ' ' + JSON.stringify(input || {})).toLowerCase();
+  // 1) 先匹配精确的 Skill 关键词
   for (const m of SKILL_PROGRESS) {
     if (m.match.test(text)) return { percent: m.percent, step: m.step };
   }
-  // Bash 工具运行 R/Python 脚本 → 推到 50%（脚本开始执行）
-  if (/^bash$|^command$/.test(name) && /python3? |rscript |seurat|monocle|clusterp|deseq2|scanpy/.test(text)) {
-    return { percent: 50, step: '运行分析脚本' };
+  // 2) Bash 工具：识别 R/Python/分析脚本（含内联 -c、heredoc）
+  if (name === 'bash' || name === 'command') {
+    if (/python[23]?\s|rscript\s|^r\s|conda\s|seurat|monocle[23]?|scanpy|clusterp|deseq2|edgeR|limma|fgsea|gsea|h5py|numpy|scipy|pandas|matplotlib/.test(text)) {
+      return { percent: 50, step: '运行分析脚本' };
+    }
+    if (/install|download|fetch|curl|wget|tar\s|unzip|git\s|pip\s|apt\s/.test(text)) {
+      return { percent: 35, step: '安装/下载依赖' };
+    }
+    if (/cp\s|mv\s|chmod|chown|mkdir|sed\s|rm\s/.test(text)) {
+      return { percent: 80, step: '整理输出文件' };
+    }
+    // 任何其他 Bash 命令（ls/cat/find/grep/echo 等）→ 25%
+    return { percent: Math.max(25, progress.percent + 5), step: '执行命令' };
   }
-  return null;
+  // 3) Write/Edit：写文件 → 70%
+  if (name === 'write' || name === 'edit' || name === 'multiedit' || name === 'notebookedit') {
+    return { percent: 70, step: '生成结果文件' };
+  }
+  // 4) Read 数据文件 → 15%
+  if (name === 'read' || name === 'glob' || name === 'grep') {
+    if (/upload|\.h5$|\.csv$|\.tsv$|\.txt$|\.json$|\.fasta|\.fastq|\.bam|\.vcf|\.r$|\.py$|\.R$|\.pdf|\.docx|\.xlsx/.test(text)) {
+      return { percent: 15, step: '读取数据' };
+    }
+    // 读其他文件 → 20%
+    return { percent: Math.max(20, progress.percent + 3), step: '读取信息' };
+  }
+  // 5) 兜底：任何工具调用 → progress+3
+  return { percent: Math.min(45, progress.percent + 3), step: '准备中' };
 }
 
 // 从 R/Python 子进程输出解析 [N/M] 格式进度
@@ -454,6 +478,25 @@ app.post('/api/move', authMiddleware, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── Rename file/folder API ────────────────────────────────────────────────────
+app.post('/api/rename', authMiddleware, (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const src = path.resolve(path.join(userDir, from));
+  const dst = path.resolve(path.join(userDir, to));
+  if (!src.startsWith(userDir) || !dst.startsWith(userDir)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (from === to) return res.status(400).json({ error: 'Same name' });
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'Source not found' });
+  if (fs.existsSync(dst)) return res.status(400).json({ error: 'Target already exists' });
+  try {
+    fs.renameSync(src, dst);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ─── Delete file API ────────────────────────────────────────────────────────────
 app.delete('/api/file', authMiddleware, (req, res) => {
   const filePath = req.query.path || '';
@@ -630,25 +673,32 @@ app.use(express.static(path.join(__dirname, 'public')));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Message queue: process one user's Claude turn at a time
-let processingQueue = false;
-const messageQueue = [];
-const runningProcs = new Map(); // userId -> proc
+// Per-user 队列：不同用户互不阻塞；同一用户消息顺序执行
+const userQueues = new Map();       // userId -> [{user,message,conversationId,ws,send}]
+const userProcessing = new Set();   // 正在处理的 userId
+const runningProcs = new Map();     // userId -> proc
 
-function processNext() {
-  if (processingQueue || messageQueue.length === 0) return;
-  processingQueue = true;
+function processUserQueue(userId) {
+  const q = userQueues.get(userId);
+  if (!q || q.length === 0 || userProcessing.has(userId)) return;
+  userProcessing.add(userId);
 
-  const { user, message, conversationId, ws, send } = messageQueue.shift();
+  const { user, message, conversationId, ws, send } = q.shift();
   runClaudeForUser(user, message, conversationId, ws, send).finally(() => {
-    processingQueue = false;
-    processNext();
+    userProcessing.delete(userId);
+    processUserQueue(userId);
   });
 }
 
 function queueClaudeRun(user, message, conversationId, ws, send) {
-  messageQueue.push({ user, message, conversationId, ws, send });
-  processNext();
+  if (!userQueues.has(user.userId)) userQueues.set(user.userId, []);
+  const q = userQueues.get(user.userId);
+  const waitCount = q.length;
+  if (waitCount > 0) {
+    send({ type: 'status', content: `排队中（你还有 ${waitCount} 条消息在等待）...` });
+  }
+  q.push({ user, message, conversationId, ws, send });
+  processUserQueue(user.userId);
 }
 
 // ─── Helper: save message to database ───────────────────────────────────────────
@@ -708,9 +758,17 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: userOutputDir,
         env: claudeEnv,
-        timeout: 600000,
+        timeout: 300000,   // 5 分钟硬超时，超时 SIGTERM → close → resolve
       });
       runningProcs.set(user.userId, proc);
+      // 看门狗：8 分钟仍不退出则 SIGKILL 强制中断（防止孙进程卡住拖死队列）
+      proc._watchdog = setTimeout(() => {
+        if (proc && proc.exitCode === null && proc.signalCode === null) {
+          s({ type: 'error', content: '分析超时（8分钟），已强制中断' });
+          s({ type: 'status', content: '已超时中断' });
+          try { proc.kill('SIGKILL'); } catch(e) {}
+        }
+      }, 8 * 60 * 1000);
     } catch (err) {
   s({ type: 'error', content: `Failed to start Claude: ${err.message}` });
       return resolve();
@@ -766,6 +824,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     });
 
     proc.on('close', (code) => {
+  if (proc._watchdog) clearTimeout(proc._watchdog);
   // 进程结束：进度强制设为 100%
   progress.percent = 100;
   progress.step = '完成';
@@ -802,6 +861,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     });
 
     proc.on('error', (err) => {
+  if (proc._watchdog) clearTimeout(proc._watchdog);
   s({ type: 'error', content: `Process error: ${err.message}` });
       runningProcs.delete(user.userId);
       resolve();
@@ -837,7 +897,7 @@ function handleStreamEvent(ev, send, user, progress) {
           case 'tool_use': {
             send({ type: 'tool_use', name: c.name || 'unknown', input: c.input || {} });
             // ─── 进度条：根据工具名映射到分析步骤 ───
-            const p = getProgressForTool(c.name, c.input);
+            const p = getProgressForTool(c.name, c.input, progress);
             if (p && progress && p.percent > progress.percent) {
               progress.percent = p.percent;
               progress.step = p.step;
