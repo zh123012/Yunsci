@@ -142,12 +142,13 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .fb-item .fck{width:14px;height:14px;cursor:pointer;flex-shrink:0;accent-color:var(--accent)}
 .fb-item.sel{background:#ddf4ff;outline:1px solid var(--accent)}
 .fb-item.sel:hover{background:#d0eeff}
-#batch-bar{display:flex;align-items:center;gap:8px;padding:6px 8px;border-top:1px solid var(--border);background:var(--bg2);flex-shrink:0;font-size:12px}
-#batch-bar .bb-n{flex:1;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#batch-bar button{border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
-#batch-bar button:hover{border-color:var(--accent);color:var(--accent)}
-#batch-bar .bb-del{color:var(--red)}
-#batch-bar .bb-del:hover{border-color:var(--red);color:var(--red)}
+#bb-tools{display:flex;align-items:center;gap:6px;padding:5px 8px;border-bottom:1px solid var(--border);background:#fff7ed;flex-shrink:0;font-size:12px}
+#bb-tools .bb-n{flex:1;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#bb-tools button{border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;padding:2px 9px;cursor:pointer;font-size:12px}
+#bb-tools button:hover{border-color:var(--accent);color:var(--accent)}
+#bb-tools .bb-del{color:var(--red)}
+#bb-tools .bb-del:hover{border-color:var(--red);color:var(--red)}
+.is-dir.dd-over{outline:2px dashed var(--accent)}
 .modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:center;justify-content:center}
 .modal-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px;width:420px;max-width:90vw;box-shadow:var(--shadow-lg)}
 .modal-box h3{margin:0 0 10px;font-size:14px}
@@ -189,7 +190,7 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 <div class="inp-area"><div class="inp-rw"><div class="inp-wrap"><textarea id="inp" rows="1" placeholder='Ask Yunsci... Type "/" for skills'></textarea><div class="skill-popup" id="sp"></div></div>
 <button id="sbtn" onclick="if(this.textContent==='⬜'){cancelRun()}else{send()}">➤</button></div><div class="inp-hint"><span id="hint-text">Enter send · Shift+Enter newline</span><span id="us"></span></div></div></div>
 <div class="sidebar" id="sb"><div class="sidebar-tabs"><button class="sidebar-tab" data-sidebar="uploads">📤 Uploads</button><button class="sidebar-tab act" data-sidebar="output">📊 Output</button><button class="sidebar-add" onclick="newFolder()" title="新建文件夹">📁+</button></div>
-<div class="sidebar-body"><div class="sidebar-panel" id="sp-uploads"></div><div class="sidebar-panel act" id="sp-output" style="display:flex"></div></div><div id="batch-bar" style="display:none"><span class="bb-n">已选 0 项</span><button class="bb-del" onclick="batchDelete()">🗑 删除</button><button onclick="batchMove()">📁 移入文件夹</button><button onclick="batchClear()" title="取消选择">✕</button></div></div>
+<div id="bb-tools" style="display:none"><span class="bb-n">已选 <b id="bb-count">0</b> 项</span><button class="bb-del" onclick="batchDelete()">🗑 删除</button><button onclick="batchMove()">📁 移入文件夹</button><button onclick="batchClear()" title="取消选择">✕</button></div><div class="sidebar-body"><div class="sidebar-panel" id="sp-uploads"></div><div class="sidebar-panel act" id="sp-output" style="display:flex"></div></div></div>
 <div class="sidebar-tog" id="sbt">◀</div></div></div>
 <div class="toast" id="toast"></div>
 <div class="vpn-menu" id="vpn-menu"></div>
@@ -267,7 +268,7 @@ if(m.type==='auth_ok'){document.getElementById('st').textContent='Ready';return}
 if(m.type==='auth_error'){logout();return}
 if(m.type==='user_message'){addMsg(m.content,'u',ci);saveMsg(ci||actC,'user',m.content);busy=1;document.getElementById('st').textContent='Thinking...';document.getElementById('sbtn').textContent='⬜';document.getElementById('sbtn').disabled=0;document.getElementById('inp').disabled=0;document.getElementById('hint-text').textContent='Thinking... 输入消息回车可插话排队';
  // 重置进度条
- var pw=document.getElementById('prog-wrap');var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');if(pw){pw.style.display='flex';pf.style.width='0%';pp.textContent='0%';ps.textContent='初始化...'}
+ clearTimeout(window._progHideT);window._progHideT=null;var pw=document.getElementById('prog-wrap');var pf=document.getElementById('prog-fill');var pp=document.getElementById('prog-pct');var ps=document.getElementById('prog-step');if(pw){pw.style.display='flex';pf.style.width='0%';pp.textContent='0%';ps.textContent='初始化...'}
  var el=actMsEl(ci);var d=document.createElement('div');d.className='msg';d.innerHTML='<div class="msg-h"><span class="av a">Y</span>小云</div><div class="msg-b a"></div>';el.appendChild(d);
  sSt(ci,{b:d.querySelector('.msg-b'),buf:'',t:null});return}
 if(m.type==='thinking'){var s=gSt(ci);if(!s||!s.b||!m.content)return;if(!s.t){s.t=document.createElement('div');s.t.className='think';s.t.innerHTML='<div class="think-h" onclick="togT(this)"><span class="ar">▶</span> Thinking</div><div class="think-b"></div>';s.b.parentNode.insertBefore(s.t,s.b)}var tb=s.t.querySelector('.think-b');if(tb&&tb.textContent.length<3000)tb.textContent+=m.content;return}
@@ -281,7 +282,8 @@ if(m.type==='turn_complete'){var s=gSt(ci);if(s&&s.b&&s.buf.trim()){s.b.innerHTM
  var curPct=parseInt((pp.textContent||'0').replace('%',''))||0;
  if(pf){
    if(curPct<100){pf.style.width='100%';pp.textContent='100%';ps.textContent='完成';}
-   setTimeout(function(){if(pw)pw.style.display='none';pf.style.width='0%';pp.textContent='0%';ps.textContent='待机'},5000)
+   clearTimeout(window._progHideT);
+   window._progHideT=setTimeout(function(){if(busy)return;if(pw)pw.style.display='none';if(pf)pf.style.width='0%';if(pp)pp.textContent='0%';if(ps)ps.textContent='待机'},5000)
  }
   if(pendingMsg.length){var next=pendingMsg.shift();document.getElementById('hint-text').textContent='已插话: '+next+(pendingMsg.length?' · 还有'+pendingMsg.length+'条排队':'');if(ws&&ws.readyState===WebSocket.OPEN){ws.send(JSON.stringify({type:'message',content:next,conversation_id:ci}))}}else{document.getElementById('hint-text').textContent='Enter send · Shift+Enter newline';busy=0;document.getElementById('st').textContent='Ready';document.getElementById('sbtn').textContent='➤';document.getElementById('inp').disabled=0;document.getElementById('inp').focus()}
   return}
@@ -327,13 +329,13 @@ document.getElementById('sbt').addEventListener('click',function(){var sb=docume
 // ═══ Plots ════════════════════════════════════════════════
 
 // ═══ File Browser ═════════════════════════════════════════
-function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':(f.isDir?'<span class="frf" data-ref="'+fp+'" title="引用文件夹">📎</span>':'');var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var ck='<input type="checkbox" class="fck" data-path="'+fp+'"'+(selSet.has(fp)?' checked':'')+' onclick="event.stopPropagation()" draggable="false">';
+function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':(f.isDir?'<span class="frf" data-ref="'+fp+'" title="引用文件夹">📎</span>':'');var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=' draggable="false"';var ck='<input type="checkbox" class="fck" data-path="'+fp+'"'+(selSet.has(fp)?' checked':'')+' onclick="event.stopPropagation()" draggable="false">';
 var cl=f.isDir?' class="fb-item is-dir'+(selSet.has(fp)?' sel':'')+'" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item'+(selSet.has(fp)?' sel':'')+'" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'>'+ck+'<span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
 function newFolder(){var name=prompt('输入文件夹名称:');if(!name||!name.trim())return;var side=document.querySelector('.sidebar-tab.act').dataset.sidebar;var path=side+'/'+name.trim();fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:path})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已创建文件夹');loadSidebar(side,side)}else toast(d.error||'创建失败')})}
 
 // ═══ Batch select / delete / move ══════════════════════════════════════
 var selSet=new Set();
-function refreshBatchBar(){var b=document.getElementById('batch-bar');if(!b)return;var n=selSet.size;if(n){b.style.display='flex';b.querySelector('.bb-n').textContent='已选 '+n+' 项'}else{b.style.display='none'}}
+function refreshBatchBar(){var b=document.getElementById('bb-tools');if(!b)return;var n=selSet.size;if(n){b.style.display='flex';var c=document.getElementById('bb-count');if(c)c.textContent=n}else{b.style.display='none'}}
 function batchClear(){selSet.clear();refreshBatchBar();document.querySelectorAll('.fck').forEach(function(c){c.checked=false});document.querySelectorAll('.fb-item.sel').forEach(function(i){i.classList.remove('sel')})}
 function batchDelete(){
   if(!selSet.size)return;
@@ -375,19 +377,8 @@ function mvDo(){
   var target=(document.getElementById('mv-path').value||'').trim();
   if(!target){toast('请输入目标文件夹路径');return}
   var arr=Array.from(selSet);if(!arr.length){mvCancel();return}
-  document.getElementById('st').textContent='Moving...';
-  fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:target})}).then(function(r){return r.json()}).then(function(d){
-    if(!d.success){toast('创建文件夹失败: '+(d.error||''));document.getElementById('st').textContent='Ready';return}
-    var done=0,failed=0,moved=0;
-    arr.forEach(function(p){
-      if(p===target||p.indexOf(target+'/')===0){done++;return}
-      fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:p,to:target})})
-        .then(function(r){return r.json()})
-        .then(function(d2){done++;if(d2.success)moved++;else failed++})
-        .catch(function(){done++;failed++})
-        .then(function(){if(done===arr.length){toast('已移动 '+moved+' 项'+(failed?'，失败 '+failed:''));document.getElementById('st').textContent='Ready';mvCancel();batchClear();var sde=(arr[0]||'').split('/')[0];if(sde)loadSidebar(sde,sde)}});
-    });
-  }).catch(function(){document.getElementById('st').textContent='Ready';toast('操作失败')});
+  mvCancel();
+  doMove(arr,target);
 }
 document.addEventListener('change',function(e){
   var ck=e.target.closest('.fck');if(!ck||!ck.dataset.path)return;
@@ -397,23 +388,66 @@ document.addEventListener('change',function(e){
   refreshBatchBar();
 });
 
-// Drag & drop file to folder
-var dragFrom=null;
-document.addEventListener('dragstart',function(e){
-  var item=e.target.closest('.fb-item');
-  if(item&&item.dataset.path){dragFrom=item.dataset.path;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',dragFrom)}
+// ═══ 滑动选中 + 拖动移入文件夹（自定义拖拽，替代 native drag）═══
+var dnd=null;
+function setItemSel(row,on){
+  if(!row)return;
+  var ck=row.querySelector('.fck');var p=row.dataset.path;if(!p)return;
+  if(on){selSet.add(p);if(ck)ck.checked=true;row.classList.add('sel')}
+  else{selSet.delete(p);if(ck)ck.checked=false;row.classList.remove('sel')}
+  refreshBatchBar();
+}
+function clearDirOver(){document.querySelectorAll('.is-dir.dd-over').forEach(function(d){d.classList.remove('dd-over')})}
+function doMove(items,target){
+  if(!items||!items.length)return;
+  document.getElementById('st').textContent='Moving...';
+  fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:target})}).then(function(r){return r.json()}).then(function(d){
+    if(!d.success){toast('创建文件夹失败: '+(d.error||''));document.getElementById('st').textContent='Ready';return}
+    var done=0,failed=0,moved=0;
+    items.forEach(function(p){
+      if(p===target||p.indexOf(target+'/')===0){done++;return}
+      fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:p,to:target})})
+        .then(function(r){return r.json()})
+        .then(function(d2){done++;if(d2.success)moved++;else failed++})
+        .catch(function(){done++;failed++})
+        .then(function(){if(done===items.length){toast('已移动 '+moved+' 项'+(failed?'，失败 '+failed:''));document.getElementById('st').textContent='Ready';batchClear();var sde=(target||'').split('/')[0];if(sde)loadSidebar(sde,sde)}});
+    });
+  }).catch(function(){document.getElementById('st').textContent='Ready';toast('操作失败')});
+}
+document.addEventListener('mousedown',function(e){
+  var it=e.target.closest('.fb-item');
+  if(!it||!it.dataset.path)return;
+  if(e.target.closest('.fck')||e.target.closest('.fr')||e.target.closest('.frf')||e.target.closest('.fd')||e.target.closest('.fdel')||e.target.closest('.frn'))return;
+  dnd={x:e.clientX,y:e.clientY,it:it,start:it.dataset.path,moved:false,started:false};
+  e.preventDefault();
 });
-document.addEventListener('dragover',function(e){
-  var dir=e.target.closest('.is-dir');
-  if(dir){e.preventDefault();e.dataTransfer.dropEffect='move';dir.style.outline='2px dashed var(--accent)'}
+document.addEventListener('mousemove',function(e){
+  if(!dnd||!(e.buttons&1))return;
+  var dx=e.clientX-dnd.x,dy=e.clientY-dnd.y;
+  if(!dnd.moved&&Math.abs(dx)+Math.abs(dy)<4)return;
+  dnd.moved=true;
+  var el=document.elementFromPoint(e.clientX,e.clientY);
+  var dir=el?el.closest('.is-dir'):null;
+  clearDirOver();
+  if(dir)dir.classList.add('dd-over');
+  var row=el?el.closest('.fb-item'):null;
+  if(row&&!dir){if(!dnd.started){dnd.started=true;setItemSel(dnd.it,true)}setItemSel(row,true)}
 });
-document.addEventListener('dragleave',function(e){
-  var dir=e.target.closest('.is-dir');
-  if(dir)dir.style.outline=''
-});
-document.addEventListener('drop',function(e){
-  var dir=e.target.closest('.is-dir');
-  if(dir){e.preventDefault();dir.style.outline='';var from=dragFrom||e.dataTransfer.getData('text/plain');if(!from)return;var to=dir.dataset.path;if(from===to)return;fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:from,to:to})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已移动');var sde=from.split('/')[0];loadSidebar(sde,sde)}else toast(d.error||'移动失败')});dragFrom=null}
+document.addEventListener('mouseup',function(e){
+  if(!dnd)return;
+  clearDirOver();
+  if(dnd.moved){
+    var el=document.elementFromPoint(e.clientX,e.clientY);
+    var dir=el?el.closest('.is-dir'):null;
+    if(dir){
+      var to=dir.dataset.path;
+      if(to&&to!==dnd.start){
+        var arr=(selSet.has(dnd.start)&&selSet.size)?Array.from(selSet):[dnd.start];
+        doMove(arr,to);
+      }
+    }
+  }
+  dnd=null;
 });
 document.addEventListener('click',function(e){
   var del=e.target.closest('.fdel');
