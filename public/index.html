@@ -132,7 +132,7 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .fb-item .fi{width:18px;text-align:center;font-size:13px}
 .fb-item .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
 .fb-item .fs{color:var(--text3);font-size:11px;white-space:nowrap}
-.fb-item .fd,.fb-item .fr,.fb-item .fdel,.fb-item .frn{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
+.fb-item .fd,.fb-item .fr,.fb-item .frf,.fb-item .fdel,.fb-item .frn{font-size:11px;padding:0 2px;cursor:pointer;visibility:hidden;text-decoration:none}
 .fb-item:hover .fd,.fb-item:hover .fr,.fb-item:hover .fdel,.fb-item:hover .frn{visibility:visible}
 .fb-item .fd{color:var(--accent)}
 .fb-item .fr{color:var(--green)}
@@ -306,7 +306,7 @@ document.getElementById('sbt').addEventListener('click',function(){var sb=docume
 // ═══ Plots ════════════════════════════════════════════════
 
 // ═══ File Browser ═════════════════════════════════════════
-function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':'';var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
+function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':(f.isDir?'<span class="frf" data-ref="'+fp+'" title="引用文件夹">📎</span>':'');var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
 function newFolder(){var name=prompt('输入文件夹名称:');if(!name||!name.trim())return;var side=document.querySelector('.sidebar-tab.act').dataset.sidebar;var path=side+'/'+name.trim();fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:path})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已创建文件夹');loadSidebar(side,side)}else toast(d.error||'创建失败')})}
 
 // Drag & drop file to folder
@@ -349,6 +349,19 @@ document.addEventListener('click',function(e){
         else toast(d.error||'重命名失败')
       })
     }
+    return
+  }
+  var frf=e.target.closest('.frf');
+  if(frf&&frf.dataset.ref){e.preventDefault();e.stopPropagation();
+    var fp=frf.dataset.ref;var base=fp.split('/').pop();
+    var rel=(fp.indexOf('uploads/')===0)?'../'+fp:fp.replace(/^output\//,'');
+    var fill=function(p){document.getElementById('inp').value=p;document.getElementById('inp').focus();swView('chat')};
+    fetch('/api/browse?path='+encodeURIComponent(fp),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){
+      var names=(d.files||[]).filter(function(f){return f.isFile}).map(function(f){return f.name});
+      var p='分析一下 '+base+' 文件夹（相对路径 '+rel+'）里的所有文件';
+      if(names.length)p+='：'+names.join(', ');
+      fill(p);
+    }).catch(function(){fill('分析一下 '+base+' 文件夹（相对路径 '+rel+'）里的所有文件')});
     return
   }
   var seg=e.target.closest('.seg');if(seg){loadSidebar(seg.dataset.side,seg.dataset.p);return}
