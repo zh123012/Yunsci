@@ -139,6 +139,26 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 .fb-item .frf{color:var(--green)}
 .fb-item .fdel{color:var(--red)}
 .fb-item .frn{color:var(--accent)}
+.fb-item .fck{width:14px;height:14px;cursor:pointer;flex-shrink:0;accent-color:var(--accent)}
+.fb-item.sel{background:#ddf4ff;outline:1px solid var(--accent)}
+.fb-item.sel:hover{background:#d0eeff}
+#batch-bar{display:flex;align-items:center;gap:8px;padding:6px 8px;border-top:1px solid var(--border);background:var(--bg2);flex-shrink:0;font-size:12px}
+#batch-bar .bb-n{flex:1;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#batch-bar button{border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:12px}
+#batch-bar button:hover{border-color:var(--accent);color:var(--accent)}
+#batch-bar .bb-del{color:var(--red)}
+#batch-bar .bb-del:hover{border-color:var(--red);color:var(--red)}
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:center;justify-content:center}
+.modal-box{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:18px;width:420px;max-width:90vw;box-shadow:var(--shadow-lg)}
+.modal-box h3{margin:0 0 10px;font-size:14px}
+.modal-box input{width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:var(--bg)}
+.modal-box .mv-hint{margin-top:10px;font-size:11px;color:var(--text3)}
+.modal-box .mv-folds{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;max-height:140px;overflow-y:auto}
+.modal-box .mv-chip{border:1px solid var(--border);background:var(--bg2);border-radius:20px;padding:3px 10px;font-size:11px;cursor:pointer;color:var(--accent)}
+.modal-box .mv-chip:hover{background:#ddf4ff}
+.modal-box .mv-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.modal-box .mv-acts button{border:1px solid var(--border);background:var(--bg);border-radius:8px;padding:6px 16px;cursor:pointer;font-size:13px}
+.modal-box .mv-acts button.p{background:var(--accent);color:#fff;border-color:var(--accent)}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1f2328;color:#fff;padding:8px 20px;border-radius:8px;font-size:13px;z-index:999;opacity:0;transition:.3s}
 .toast.s{opacity:1}
 </style></head>
@@ -169,7 +189,7 @@ html,body{height:100%;margin:0;font-family:var(--font);background:var(--bg);colo
 <div class="inp-area"><div class="inp-rw"><div class="inp-wrap"><textarea id="inp" rows="1" placeholder='Ask Yunsci... Type "/" for skills'></textarea><div class="skill-popup" id="sp"></div></div>
 <button id="sbtn" onclick="if(this.textContent==='⬜'){cancelRun()}else{send()}">➤</button></div><div class="inp-hint"><span id="hint-text">Enter send · Shift+Enter newline</span><span id="us"></span></div></div></div>
 <div class="sidebar" id="sb"><div class="sidebar-tabs"><button class="sidebar-tab" data-sidebar="uploads">📤 Uploads</button><button class="sidebar-tab act" data-sidebar="output">📊 Output</button><button class="sidebar-add" onclick="newFolder()" title="新建文件夹">📁+</button></div>
-<div class="sidebar-body"><div class="sidebar-panel" id="sp-uploads"></div><div class="sidebar-panel act" id="sp-output" style="display:flex"></div></div></div>
+<div class="sidebar-body"><div class="sidebar-panel" id="sp-uploads"></div><div class="sidebar-panel act" id="sp-output" style="display:flex"></div></div><div id="batch-bar" style="display:none"><span class="bb-n">已选 0 项</span><button class="bb-del" onclick="batchDelete()">🗑 删除</button><button onclick="batchMove()">📁 移入文件夹</button><button onclick="batchClear()" title="取消选择">✕</button></div></div>
 <div class="sidebar-tog" id="sbt">◀</div></div></div>
 <div class="toast" id="toast"></div>
 <div class="vpn-menu" id="vpn-menu"></div>
@@ -307,8 +327,75 @@ document.getElementById('sbt').addEventListener('click',function(){var sb=docume
 // ═══ Plots ════════════════════════════════════════════════
 
 // ═══ File Browser ═════════════════════════════════════════
-function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':(f.isDir?'<span class="frf" data-ref="'+fp+'" title="引用文件夹">📎</span>':'');var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var cl=f.isDir?' class="fb-item is-dir" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'><span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
+function loadSidebar(side,sub){console.log('loadSidebar',side,sub);var body=document.querySelector('#sp-'+side);if(!body)return;body.innerHTML='<div style="padding:12px;text-align:center;color:var(--text3)">Loading '+side+'...</div>';var path=(sub||side||'').replace(/^\//,'');fetch('/api/browse?path='+encodeURIComponent(path),{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){var cp=d.currentPath||'';var pts=cp.split('/').filter(Boolean);var h='<div class="fbrowser"><div class="fb-path"><span class="seg" data-side="'+side+'" data-p="'+side+'">📁 '+side.toUpperCase()+'</span>';for(var i=0;i<pts.length;i++){var fp=pts.slice(0,i+1).join('/');h+='<span class="sep">/</span><span class="seg" data-side="'+side+'" data-p="'+fp+'">'+pts[i]+'</span>'}h+='</div><div class="fb-body">';(d.files||[]).sort(function(a,b){if(a.isDir&&!b.isDir)return -1;if(!a.isDir&&b.isDir)return 1;return a.name.localeCompare(b.name)}).forEach(function(f){var ic=f.isDir?'📁':(f.name.match(/\.(png|jpg|jpeg|gif|svg|webp)$/i)?'🖼️':'📄');var sz=f.isFile?fsz(f.size):'';var fp=cp?cp+'/'+f.name:f.name;var ref=f.isFile?'<span class="fr" data-ref="'+fp+'" title="引用">📎</span>':(f.isDir?'<span class="frf" data-ref="'+fp+'" title="引用文件夹">📎</span>':'');var dl=f.isFile?'<span class="fd" data-d="'+fp+'" title="下载">⬇</span>':'';var rn='<span class="frn" data-rn="'+fp+'" title="重命名">✏️</span>';var del='<span class="fdel" data-del="'+fp+'" title="删除">🗑</span>';var draggable=f.isFile?' draggable="true"':' draggable="false"';var ck='<input type="checkbox" class="fck" data-path="'+fp+'"'+(selSet.has(fp)?' checked':'')+' onclick="event.stopPropagation()" draggable="false">';
+var cl=f.isDir?' class="fb-item is-dir'+(selSet.has(fp)?' sel':'')+'" data-side="'+side+'" data-p="'+fp+'" data-path="'+fp+'"':' class="fb-item'+(selSet.has(fp)?' sel':'')+'" data-side="'+side+'" data-path="'+fp+'"';h+='<div'+cl+draggable+'>'+ck+'<span class="fi">'+ic+'</span><span class="fn">'+esc(f.name)+'</span><span class="fs">'+sz+'</span>'+rn+' '+ref+' '+dl+' '+del+'</div>'});if(!d.files||!d.files.length)h+='<div style="padding:16px;text-align:center;color:var(--text3)">(empty)</div>';body.innerHTML=h+'</div></div>'}).catch(function(e){console.error(e);body.innerHTML='<div style="padding:12px;color:var(--red)">Error</div>'})}
 function newFolder(){var name=prompt('输入文件夹名称:');if(!name||!name.trim())return;var side=document.querySelector('.sidebar-tab.act').dataset.sidebar;var path=side+'/'+name.trim();fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:path})}).then(function(r){return r.json()}).then(function(d){if(d.success){toast('已创建文件夹');loadSidebar(side,side)}else toast(d.error||'创建失败')})}
+
+// ═══ Batch select / delete / move ══════════════════════════════════════
+var selSet=new Set();
+function refreshBatchBar(){var b=document.getElementById('batch-bar');if(!b)return;var n=selSet.size;if(n){b.style.display='flex';b.querySelector('.bb-n').textContent='已选 '+n+' 项'}else{b.style.display='none'}}
+function batchClear(){selSet.clear();refreshBatchBar();document.querySelectorAll('.fck').forEach(function(c){c.checked=false});document.querySelectorAll('.fb-item.sel').forEach(function(i){i.classList.remove('sel')})}
+function batchDelete(){
+  if(!selSet.size)return;
+  if(!confirm('确定删除选中的 '+selSet.size+' 项吗？'))return;
+  var arr=Array.from(selSet);var done=0,failed=0;
+  arr.forEach(function(p){
+    fetch('/api/file?path='+encodeURIComponent(p),{method:'DELETE',headers:{Authorization:'Bearer '+tok}})
+      .then(function(r){return r.json()})
+      .then(function(d){if(d.success)done++;else{failed++;toast('删除失败: '+p.split('/').pop())}})
+      .catch(function(){failed++})
+      .then(function(){if(done+failed===arr.length){toast('已删除 '+done+' 项'+(failed?'，失败 '+failed:''));batchClear();var sde=(arr[0]||'').split('/')[0];if(sde)loadSidebar(sde,sde)}});
+  });
+}
+function batchMove(){mvOpen()}
+function mvOpen(){
+  var bar=document.getElementById('mv-modal');if(!bar)return;
+  var side=document.querySelector('.sidebar-tab.act').dataset.sidebar||'uploads';
+  document.getElementById('mv-path').value=side+'/';
+  loadFolderChips();
+  bar.style.display='flex';
+  setTimeout(function(){var i=document.getElementById('mv-path');if(i)i.focus()},50);
+}
+function mvCancel(){document.getElementById('mv-modal').style.display='none'}
+function loadFolderChips(){
+  var dl=document.getElementById('mv-list');var chipBox=document.getElementById('mv-folds');
+  var list=[];
+  var collect=function(side){
+    fetch('/api/browse?path='+side,{headers:{Authorization:'Bearer '+tok}}).then(function(r){return r.json()}).then(function(d){
+      (d.files||[]).filter(function(f){return f.isDir}).forEach(function(f){list.push(side+'/'+f.name)});
+      list.sort();
+      if(dl){dl.innerHTML=list.map(function(x){return '<option value="'+x+'">'}).join('')}
+      if(chipBox){chipBox.innerHTML=list.length?list.map(function(x){return '<span class="mv-chip" onclick="setMvPath(\''+x+'\')">'+x+'</span>'}).join(''):'<span style="color:var(--text3);font-size:11px">暂无文件夹</span>'}
+    }).catch(function(){});
+  };
+  collect('uploads');collect('output');
+}
+function setMvPath(p){document.getElementById('mv-path').value=p}
+function mvDo(){
+  var target=(document.getElementById('mv-path').value||'').trim();
+  if(!target){toast('请输入目标文件夹路径');return}
+  var arr=Array.from(selSet);if(!arr.length){mvCancel();return}
+  document.getElementById('st').textContent='Moving...';
+  fetch('/api/folder',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({path:target})}).then(function(r){return r.json()}).then(function(d){
+    if(!d.success){toast('创建文件夹失败: '+(d.error||''));document.getElementById('st').textContent='Ready';return}
+    var done=0,failed=0,moved=0;
+    arr.forEach(function(p){
+      if(p===target||p.indexOf(target+'/')===0){done++;return}
+      fetch('/api/move',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+tok},body:JSON.stringify({from:p,to:target})})
+        .then(function(r){return r.json()})
+        .then(function(d2){done++;if(d2.success)moved++;else failed++})
+        .catch(function(){done++;failed++})
+        .then(function(){if(done===arr.length){toast('已移动 '+moved+' 项'+(failed?'，失败 '+failed:''));document.getElementById('st').textContent='Ready';mvCancel();batchClear();var sde=(arr[0]||'').split('/')[0];if(sde)loadSidebar(sde,sde)}});
+    });
+  }).catch(function(){document.getElementById('st').textContent='Ready';toast('操作失败')});
+}
+document.addEventListener('change',function(e){
+  var ck=e.target.closest('.fck');if(!ck||!ck.dataset.path)return;
+  var p=ck.dataset.path;
+  if(ck.checked)selSet.add(p);else selSet.delete(p);
+  var it=ck.closest('.fb-item');if(it)it.classList.toggle('sel',ck.checked);
+  refreshBatchBar();
+});
 
 // Drag & drop file to folder
 var dragFrom=null;
@@ -433,4 +520,19 @@ h=h.replace(/^#### (.+)$/gm,'<h4>$1</h4>');h=h.replace(/^### (.+)$/gm,'<h3>$1</h
 h=h.replace(/^&gt;\s?(.+)$/gm,'<blockquote>$1</blockquote>');h=h.replace(/^---$/gm,'<hr>');
 h=h.replace(/\n\|(.+)\|\n\|[-| ]+\|\n((?:\|.+\|\n?)*)/g,function(m,head,rows){var c=head.split('|').filter(function(x){return x.trim()}).map(function(x){return'<th>'+x.trim()+'</th>'}).join('');var r=rows.split('\n').filter(function(l){return l.trim()}).map(function(l){return'<tr>'+l.split('|').filter(function(x){return x.trim()}).map(function(x){return'<td>'+x.trim()+'</td>'}).join('')+'</tr>'}).join('');return'\n<table><thead><tr>'+c+'</tr></thead><tbody>'+r+'</tbody></table>\n'});
 h=h.replace(/\n{2,}/g,'</p><p>');h='<p>'+h+'</p>';h=h.replace(/<p>\s*(<(?:pre|table|h[234]|blockquote|hr|ul|ol)[^>]*>)/g,'$1');h=h.replace(/(<\/(?:pre|table|h[234]|blockquote|hr|ul|ol)>\s*)<\/p>/g,'$1');return h}
-</script></body></html>
+</script>
+<div id="mv-modal" class="modal-mask" style="display:none">
+  <div class="modal-box">
+    <h3>📁 移入文件夹</h3>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:6px">目标路径（不存在会自动创建）：</div>
+    <input id="mv-path" list="mv-list" placeholder="如 uploads/新文件夹">
+    <datalist id="mv-list"></datalist>
+    <div class="mv-hint">或点选现有文件夹：</div>
+    <div class="mv-folds" id="mv-folds"></div>
+    <div class="mv-acts">
+      <button onclick="mvCancel()">取消</button>
+      <button class="p" onclick="mvDo()">移到这里</button>
+    </div>
+  </div>
+</div>
+</body></html>
