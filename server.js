@@ -667,6 +667,11 @@ app.get('/api/download', (req, res) => {
 });
 
 // Serve frontend (static)
+// 防缓存：HTML 页面始终取最新版，避免浏览器缓存旧代码
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.endsWith('.html')) res.set('Cache-Control', 'no-cache');
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
