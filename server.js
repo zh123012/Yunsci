@@ -28,6 +28,96 @@ const initSqlJs = require('sql.js');
 const PORT      = parseInt(process.env.PORT, 10) || 3456;
 const SECRET    = process.env.SECRET || 'dev-only-change-in-production';
 const CLAUDE_CMD = process.env.CLAUDE_CMD || 'claude';
+
+// ─── Skill → Progress mapping (for single-cell & general bioinfo pipelines) ──
+// 进度单调递增；多个 Skill 触发时取较大值，避免重复触发达不到下一步
+const SKILL_PROGRESS = [
+  // 数据输入
+  { match: /bio-single-cell-data-io|sa\.scanpy|sa\.anndata/, percent: 10, step: '加载数据 / 格式转换' },
+  // 预处理
+  { match: /bio-single-cell-preprocessing|sa\.bulk-rnaseq/,      percent: 20, step: 'QC + 过滤 / 归一化' },
+  // 去双胞
+  { match: /bio-single-cell-doublet-detection/,                  percent: 30, step: '去双胞检测' },
+  // 整合 / 降维
+  { match: /bio-single-cell-batch-integration|sa\.scvi-tools|cs\.scvi-tools/, percent: 45, step: '样本整合 / 批次校正' },
+  // 聚类
+  { match: /bio-single-cell-clustering/,                          percent: 55, step: '聚类 / UMAP 可视化' },
+  // Marker
+  { match: /bio-single-cell-markers-annotation/,                  percent: 65, step: 'Marker 基因识别' },
+  // 细胞类型注释
+  { match: /bio-single-cell-cell-annotation|scrna-cell-type-annotator/, percent: 75, step: '细胞类型注释' },
+  // 轨迹 / 拟时序
+  { match: /bio-single-cell-trajectory-injection|bio-single-cell-trajectory-inference/, percent: 85, step: '轨迹 / 拟时序分析' },
+  // 通讯
+  { match: /bio-single-cell-cell-communication|bio-single-cell-metabolite-communication/, percent: 95, step: '细胞通讯 / 代谢通讯' },
+  // 出图与完成
+  { match: /sa\.scientific-visualization|sa\.matplotlib|sa\.seaborn|sa\.scientific-slides/, percent: 98, step: '结果可视化' },
+  // 多组学 / scATAC
+  { match: /bio-single-cell-scatac-analysis|bio-single-cell-multimodal-integration/, percent: 70, step: '多组学分析' },
+  { match: /bio-single-cell-lineage-tracing|bio-single-cell-perturb-seq/, percent: 80, step: '谱系 / 扰动分析' },
+  // 差异表达 / 富集（bulk RNA-seq 主力）
+  { match: /sa\.pydeseq2|sa\.pathway-enrichment/,                 percent: 60, step: '差异表达 / 通路富集' },
+  // 文献调研
+  { match: /sa\.literature-review|sa\.paper-lookup|sa\.citation-management|research-lookup|database-lookup/, percent: 35, step: '文献检索 / 综述' },
+  // 写作
+  { match: /scientific-writing|scientific-brainstorming|hypothesis-generation|ns\.nature-writing|ns\.nature-polishing|ns\.nature-response/, percent: 90, step: '论文撰写 / 润色' },
+  // 基金
+  { match: /research-grants|ns\.nature-proposal-writer/,          percent: 90, step: '基金 / 标书撰写' },
+];
+
+function getProgressForTool(toolName, input, progress) {
+  const name = (toolName || '').toLowerCase();
+  const text = (name + ' ' + JSON.stringify(input || {})).toLowerCase();
+  // 1) 先匹配精确的 Skill 关键词
+  for (const m of SKILL_PROGRESS) {
+    if (m.match.test(text)) return { percent: m.percent, step: m.step };
+  }
+  // 2) Bash 工具：识别 R/Python/分析脚本（含内联 -c、heredoc）
+  if (name === 'bash' || name === 'command') {
+    if (/python[23]?\s|rscript\s|^r\s|conda\s|seurat|monocle[23]?|scanpy|clusterp|deseq2|edgeR|limma|fgsea|gsea|h5py|numpy|scipy|pandas|matplotlib/.test(text)) {
+      return { percent: 50, step: '运行分析脚本' };
+    }
+    if (/install|download|fetch|curl|wget|tar\s|unzip|git\s|pip\s|apt\s/.test(text)) {
+      return { percent: 35, step: '安装/下载依赖' };
+    }
+    if (/cp\s|mv\s|chmod|chown|mkdir|sed\s|rm\s/.test(text)) {
+      return { percent: 80, step: '整理输出文件' };
+    }
+    // 任何其他 Bash 命令（ls/cat/find/grep/echo 等）→ 25%
+    return { percent: Math.max(25, progress.percent + 5), step: '执行命令' };
+  }
+  // 3) Write/Edit：写文件 → 70%
+  if (name === 'write' || name === 'edit' || name === 'multiedit' || name === 'notebookedit') {
+    return { percent: 70, step: '生成结果文件' };
+  }
+  // 4) Read 数据文件 → 15%
+  if (name === 'read' || name === 'glob' || name === 'grep') {
+    if (/upload|\.h5$|\.csv$|\.tsv$|\.txt$|\.json$|\.fasta|\.fastq|\.bam|\.vcf|\.r$|\.py$|\.R$|\.pdf|\.docx|\.xlsx/.test(text)) {
+      return { percent: 15, step: '读取数据' };
+    }
+    // 读其他文件 → 20%
+    return { percent: Math.max(20, progress.percent + 3), step: '读取信息' };
+  }
+  // 5) 兜底：任何工具调用 → progress+3
+  return { percent: Math.min(45, progress.percent + 3), step: '准备中' };
+}
+
+// 从 R/Python 子进程输出解析 [N/M] 格式进度
+function parseSubProgress(text) {
+  const m = text.match(/\[(\d+)\s*\/\s*(\d+)\]/);
+  if (!m) return null;
+  const cur = parseInt(m[1]), total = parseInt(m[2]);
+  if (total <= 0 || cur <= 0) return null;
+  // 映射到 50-95% 区间（脚本执行阶段）
+  const pct = 50 + Math.min(45, Math.round((cur / total) * 45));
+  return { percent: pct, step: `执行分析 ${cur}/${total}` };
+}
+
+// 进度条用的辅助符号
+function progressBar(p, w = 12) {
+  const filled = Math.round((p / 100) * w);
+  return '█'.repeat(filled) + '░'.repeat(w - filled);
+}
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
 const DB_PATH   = path.join(__dirname, 'data', 'claude-webui.db');
 const TOKEN_TTL_DAYS = 30;
@@ -263,6 +353,167 @@ app.post('/api/upload', authMiddleware, (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ─── VPN / Mihomo Control API ──────────────────────────────────────────────────
+const MIHOMO_API = 'http://127.0.0.1:9090';
+let activeVpnNode = null;
+let vpnEnabled = false; // 真正控制 Claude 是否走代理
+
+async function ensureMihomoRunning() {
+  try { require('child_process').execSync('systemctl is-active mihomo', { stdio: 'ignore' }); return true; }
+  catch (e) { return false; }
+}
+
+async function getMihomoGroups() {
+  try {
+    const r = await fetch(MIHOMO_API + '/proxies');
+    if (!r.ok) return [];
+    const d = await r.json();
+    return Object.entries(d.proxies || {})
+      .filter(([n, p]) => p.type === 'Selector' || p.type === 'url-test')
+      .map(([n]) => n);
+  } catch (e) { return []; }
+}
+
+async function getMihomoCurrent(group) {
+  try {
+    const r = await fetch(`${MIHOMO_API}/proxies/${encodeURIComponent(group)}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d.now || null;
+  } catch (e) { return null; }
+}
+
+async function selectMihomoNode(group, name) {
+  const r = await fetch(`${MIHOMO_API}/proxies/${encodeURIComponent(group)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  return r.ok;
+}
+
+app.get('/api/vpn/nodes', authMiddleware, async (req, res) => {
+  const groups = await getMihomoGroups();
+  const result = { active: null, nodes: [] };
+  if (!groups.length) return res.json(result);
+  result.active = await getMihomoCurrent(groups[0]) || activeVpnNode;
+  // List proxy servers
+  try {
+    const r = await fetch(MIHOMO_API + '/proxies');
+    const d = await r.json();
+    for (const [name, info] of Object.entries(d.proxies || {})) {
+      if (info.type === 'Selector' || info.type === 'url-test') {
+        const all = info.all || [];
+        for (const node of all) result.nodes.push({ name: node, group: name });
+      }
+    }
+    if (!result.active && result.nodes.length) result.active = result.nodes[0].name;
+  } catch (e) {}
+  res.json(result);
+});
+
+app.post('/api/vpn/node', authMiddleware, async (req, res) => {
+  const { name } = req.body || {};
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const groups = await getMihomoGroups();
+  let success = false;
+  for (const g of groups) {
+    if (await selectMihomoNode(g, name)) { success = true; break; }
+  }
+  if (success) {
+    activeVpnNode = name;
+    return res.json({ success: true, node: name });
+  }
+  res.status(500).json({ error: 'Failed to switch node' });
+});
+
+app.post('/api/vpn/on', authMiddleware, (req, res) => {
+  vpnEnabled = true;
+  res.json({ success: true, enabled: true });
+});
+
+app.post('/api/vpn/off', authMiddleware, (req, res) => {
+  vpnEnabled = false;
+  activeVpnNode = null;
+  res.json({ success: true, enabled: false });
+});
+
+app.get('/api/vpn/status', authMiddleware, (req, res) => {
+  res.json({ enabled: vpnEnabled, active: activeVpnNode });
+});
+
+// ─── Create folder API ──────────────────────────────────────────────────────────
+app.post('/api/folder', authMiddleware, (req, res) => {
+  const { path: folderPath } = req.body || {};
+  if (!folderPath) return res.status(400).json({ error: 'path required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const target = path.resolve(path.join(userDir, folderPath));
+  if (!target.startsWith(userDir)) return res.status(403).json({ error: 'Access denied' });
+  try {
+    fs.mkdirSync(target, { recursive: true });
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Move file/folder API ───────────────────────────────────────────────────────
+app.post('/api/move', authMiddleware, (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const src = path.resolve(path.join(userDir, from));
+  const dst = path.resolve(path.join(userDir, to));
+  if (!src.startsWith(userDir) || !dst.startsWith(userDir)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'Source not found' });
+  try {
+    // If dst is a directory, move inside it
+    let finalDst = dst;
+    if (fs.existsSync(dst) && fs.statSync(dst).isDirectory()) {
+      finalDst = path.join(dst, path.basename(src));
+    }
+    if (finalDst === src) return res.status(400).json({ error: 'Cannot move to itself' });
+    fs.renameSync(src, finalDst);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Rename file/folder API ────────────────────────────────────────────────────
+app.post('/api/rename', authMiddleware, (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const src = path.resolve(path.join(userDir, from));
+  const dst = path.resolve(path.join(userDir, to));
+  if (!src.startsWith(userDir) || !dst.startsWith(userDir)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+  if (from === to) return res.status(400).json({ error: 'Same name' });
+  if (!fs.existsSync(src)) return res.status(404).json({ error: 'Source not found' });
+  if (fs.existsSync(dst)) return res.status(400).json({ error: 'Target already exists' });
+  try {
+    fs.renameSync(src, dst);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Delete file API ────────────────────────────────────────────────────────────
+app.delete('/api/file', authMiddleware, (req, res) => {
+  const filePath = req.query.path || '';
+  const userDir = path.resolve(path.join(USERS_OUTPUT_DIR, req.user.username));
+  const full = path.resolve(path.join(userDir, filePath));
+  if (!full.startsWith(userDir)) return res.status(403).json({ error: 'Access denied' });
+  if (!fs.existsSync(full)) return res.status(404).json({ error: 'Not found' });
+  try {
+    if (fs.statSync(full).isDirectory()) {
+      fs.rmSync(full, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(full);
+    }
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/files', authMiddleware, (req, res) => {
   try {
     const files = fs.readdirSync(UPLOAD_DIR).map(f => {
@@ -416,31 +667,43 @@ app.get('/api/download', (req, res) => {
 });
 
 // Serve frontend (static)
+// 防缓存：HTML 页面始终取最新版，避免浏览器缓存旧代码
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.endsWith('.html')) res.set('Cache-Control', 'no-cache');
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ─── WebSocket ───────────────────────────────────────────────────────────────
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Message queue: process one user's Claude turn at a time
-let processingQueue = false;
-const messageQueue = [];
-const runningProcs = new Map(); // userId -> proc
+// Per-user 队列：不同用户互不阻塞；同一用户消息顺序执行
+const userQueues = new Map();       // userId -> [{user,message,conversationId,ws,send}]
+const userProcessing = new Set();   // 正在处理的 userId
+const runningProcs = new Map();     // userId -> proc
 
-function processNext() {
-  if (processingQueue || messageQueue.length === 0) return;
-  processingQueue = true;
+function processUserQueue(userId) {
+  const q = userQueues.get(userId);
+  if (!q || q.length === 0 || userProcessing.has(userId)) return;
+  userProcessing.add(userId);
 
-  const { user, message, conversationId, ws, send } = messageQueue.shift();
+  const { user, message, conversationId, ws, send } = q.shift();
   runClaudeForUser(user, message, conversationId, ws, send).finally(() => {
-    processingQueue = false;
-    processNext();
+    userProcessing.delete(userId);
+    processUserQueue(userId);
   });
 }
 
 function queueClaudeRun(user, message, conversationId, ws, send) {
-  messageQueue.push({ user, message, conversationId, ws, send });
-  processNext();
+  if (!userQueues.has(user.userId)) userQueues.set(user.userId, []);
+  const q = userQueues.get(user.userId);
+  const waitCount = q.length;
+  if (waitCount > 0) {
+    send({ type: 'status', content: `排队中（你还有 ${waitCount} 条消息在等待）...` });
+  }
+  q.push({ user, message, conversationId, ws, send });
+  processUserQueue(user.userId);
 }
 
 // ─── Helper: save message to database ───────────────────────────────────────────
@@ -486,13 +749,31 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
       if (!fs.existsSync(userOutputDir)) fs.mkdirSync(userOutputDir, { recursive: true });
       if (!fs.existsSync(userUploadDir)) fs.mkdirSync(userUploadDir, { recursive: true });
 
+      // 仅在 VPN 开启时注入代理，让 R/Python 的 GO/KEGG 等外部请求走代理
+      const claudeEnv = { ...process.env };
+      if (vpnEnabled) {
+        Object.assign(claudeEnv, {
+          HTTP_PROXY: 'http://127.0.0.1:7890',
+          HTTPS_PROXY: 'http://127.0.0.1:7890',
+          http_proxy: 'http://127.0.0.1:7890',
+          https_proxy: 'http://127.0.0.1:7890',
+        });
+      }
       proc = spawn(CLAUDE_CMD, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         cwd: userOutputDir,
-        env: { ...process.env },
-        timeout: 600000,
+        env: claudeEnv,
+        timeout: 300000,   // 5 分钟硬超时，超时 SIGTERM → close → resolve
       });
       runningProcs.set(user.userId, proc);
+      // 看门狗：8 分钟仍不退出则 SIGKILL 强制中断（防止孙进程卡住拖死队列）
+      proc._watchdog = setTimeout(() => {
+        if (proc && proc.exitCode === null && proc.signalCode === null) {
+          s({ type: 'error', content: '分析超时（8分钟），已强制中断' });
+          s({ type: 'status', content: '已超时中断' });
+          try { proc.kill('SIGKILL'); } catch(e) {}
+        }
+      }, 8 * 60 * 1000);
     } catch (err) {
   s({ type: 'error', content: `Failed to start Claude: ${err.message}` });
       return resolve();
@@ -501,6 +782,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     let buf = '';
     let beforeFiles;
     let assistantText = '';
+    let progress = { percent: 0, step: '初始化' };  // 进度状态（单调递增）
     try { beforeFiles = new Set(fs.readdirSync('/root').filter(f => !f.startsWith('.'))); } catch(e) {}
 
     proc.stdout.on('data', (chunk) => {
@@ -515,20 +797,43 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
           // Track assistant text for persistence
           if (ev.type === 'assistant' && ev.message && ev.message.content) {
             for (const c of ev.message.content) {
-              if (c.type === 'text') assistantText += c.text || '';
+              if (c.type === 'text') {
+                assistantText += c.text || '';
+                // 解析 Claude 转述的 Python/R 脚本 [N/M] 进度
+                const sp = parseSubProgress(c.text || '');
+                if (sp && sp.percent > progress.percent) {
+                  progress.percent = sp.percent;
+                  progress.step = sp.step;
+                  s({ type: 'progress', percent: sp.percent, step: sp.step, bar: progressBar(sp.percent) });
+                }
+              }
             }
           }
-          handleStreamEvent(ev, s, user);
+          handleStreamEvent(ev, s, user, progress);
         } catch { /* skip non-JSON lines */ }
       }
     });
 
     proc.stderr.on('data', (chunk) => {
       const t = chunk.toString().trim();
-      if (t && !t.includes('Ignoring')) s({ type: 'status', content: t });
+      if (t && !t.includes('Ignoring')) {
+        s({ type: 'status', content: t });
+        // 解析 R/Python 子进程 [N/M] 格式进度
+        const sp = parseSubProgress(t);
+        if (sp && sp.percent > progress.percent) {
+          progress.percent = sp.percent;
+          progress.step = sp.step;
+          s({ type: 'progress', percent: sp.percent, step: sp.step, bar: progressBar(sp.percent) });
+        }
+      }
     });
 
     proc.on('close', (code) => {
+  if (proc._watchdog) clearTimeout(proc._watchdog);
+  // 进程结束：进度强制设为 100%
+  progress.percent = 100;
+  progress.step = '完成';
+  s({ type: 'progress', percent: 100, step: '完成', bar: progressBar(100) });
   s({ type: 'status', content: `Done (exit: ${code})` });
       runningProcs.delete(user.userId);
       // Save assistant response to database
@@ -561,6 +866,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
     });
 
     proc.on('error', (err) => {
+  if (proc._watchdog) clearTimeout(proc._watchdog);
   s({ type: 'error', content: `Process error: ${err.message}` });
       runningProcs.delete(user.userId);
       resolve();
@@ -572,7 +878,7 @@ async function runClaudeForUser(user, message, conversationId, ws, send) {
   });
 }
 
-function handleStreamEvent(ev, send, user) {
+function handleStreamEvent(ev, send, user, progress) {
   switch (ev.type) {
     case 'system':
       if (ev.subtype === 'init') {
@@ -593,9 +899,17 @@ function handleStreamEvent(ev, send, user) {
           case 'text':
             send({ type: 'text', content: c.text || '' });
             break;
-          case 'tool_use':
+          case 'tool_use': {
             send({ type: 'tool_use', name: c.name || 'unknown', input: c.input || {} });
+            // ─── 进度条：根据工具名映射到分析步骤 ───
+            const p = getProgressForTool(c.name, c.input, progress);
+            if (p && progress && p.percent > progress.percent) {
+              progress.percent = p.percent;
+              progress.step = p.step;
+              send({ type: 'progress', percent: p.percent, step: p.step, bar: progressBar(p.percent) });
+            }
             break;
+          }
         }
       }
       break;
@@ -606,6 +920,16 @@ function handleStreamEvent(ev, send, user) {
       if (ev.session_id && user.userId) {
         user.sessionId = ev.session_id;
         updateUserSessionId(user.userId, ev.session_id);
+      }
+      // ─── result 事件：进度收尾（不必到 100%，留给 close 处理）───
+      if (progress && progress.percent < 100) {
+        // 如果到 result 还没满，说明不是典型 pipeline；推到 99 留给 close
+        const final = progress.percent < 99 ? 99 : progress.percent;
+        if (final !== progress.percent) {
+          progress.percent = final;
+          progress.step = '收尾中';
+          send({ type: 'progress', percent: final, step: '收尾中', bar: progressBar(final) });
+        }
       }
       send({
         type: 'turn_complete',
@@ -631,10 +955,13 @@ wss.on('connection', (ws) => {
 
   const send = (data) => {
     if (ws.readyState === ws.OPEN) {
-      ws.send(JSON.stringify(data));
-    } else {
-      console.error('[WS] Cannot send (state:', ws.readyState, 'type:', data.type, ')');
+      try {
+        ws.send(JSON.stringify(data));
+      } catch (e) {
+        console.error('[WS] send error:', e.message, 'type:', data.type);
+      }
     }
+    // 静默忽略 CLOSED 状态（不再污染日志）
   };
 
   ws.on('message', async (raw) => {
@@ -693,7 +1020,7 @@ wss.on('connection', (ws) => {
 initDb().then(() => {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`╔══════════════════════════════════════════════════════╗`);
-    console.log(`║        Yunsci  v2                                    ║`);
+    console.log(`║        Yunsci  v2                                     ║`);
     console.log(`╠══════════════════════════════════════════════════════╣`);
     console.log(`║  URL:      http://yunsci.dpdns.org:${PORT}            `);
     console.log(`║  Storage:  ${DB_PATH}`);
