@@ -4,3 +4,4 @@ uploads/
 output/
 *.db
 .env
+*.bak-*
